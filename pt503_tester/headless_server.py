@@ -87,12 +87,12 @@ DEFAULT_TCP_HOST = DEFAULT_HTTP_HOST
 DEFAULT_TCP_PORT = 8765
 MAX_TCP_LINE_BYTES = 65_536
 
-# Pelco-D manual motion is latched by direction bits.  Most units have an
-# internal runaway-protection timeout of roughly 15 s, so a still-active motion
-# command is refreshed about every 5 s.  There is intentionally no short
-# application watchdog: manual motion ends only on an explicit STOP/release,
+# Pelco-D manual motion is latched by direction bits. Generic Pelco guidance
+# describes a longer runaway timeout, but PT503 field behavior can stop sooner.
+# Refresh an active manual motion once per second. There is intentionally no
+# short application watchdog: manual motion ends only on explicit STOP/release,
 # another motion mode, serial disconnect, or communication failure.
-JOG_RESEND_INTERVAL_S = 5.0
+JOG_RESEND_INTERVAL_S = 1.0
 PELCO_MIN_COMMAND_GAP_S = 0.32
 
 PROTOCOL_NAME = 'PT503-Control'
@@ -172,7 +172,8 @@ class HeadlessController:
         self._jog_next_resend = 0.0
         # Active continuous JOG key: (pan, tilt, pan_level, tilt_level).
         # The PT unit receives the frame at start/change and then about every
-        # five seconds only to satisfy Pelco-D runaway protection.
+        # one second while manual JOG remains active. The shorter interval is
+        # intentional for PT503 units that stop sooner than generic Pelco guidance.
         self._active_jog: tuple[Any, Any, int, int] | None = None
         self._last_serial_tx_at = 0.0
         self._laser_deadline = 0.0
@@ -373,8 +374,8 @@ class HeadlessController:
 
                     # Pelco-D runaway protection: while the operator is still
                     # holding manual motion, repeat the same motion command only
-                    # about every five seconds.  Do NOT send STOP on a short
-                    # software timeout; release/STOP is authoritative.
+                    # once per second. Do NOT send STOP on a software timer;
+                    # release/STOP is authoritative.
                     if jogging and now >= self._jog_next_resend:
                         pan, tilt, pan_level, tilt_level = self._active_jog
                         self.send(
@@ -1197,8 +1198,8 @@ class HeadlessController:
                     if unchanged:
                         # Old clients may still send periodic motion.jog requests.
                         # Ignore duplicates WITHOUT moving the server's own next
-                        # 5 s physical refresh time; otherwise a 1 s client
-                        # keepalive could postpone the Pelco refresh forever.
+                        # physical refresh time; otherwise duplicate client keepalives
+                        # could postpone the server-side Pelco refresh forever.
                         rx: list[dict[str, Any]] = []
                     else:
                         rx = self.send(

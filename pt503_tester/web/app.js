@@ -1039,9 +1039,16 @@ document
     .querySelectorAll('[data-pan]')
     .forEach(element => {
 
+        // Manual control is a held ON state. Prevent browser touch/drag gestures
+        // from cancelling the pointer while the operator is still holding it.
+        element.style.touchAction = 'none';
+        element.style.userSelect = 'none';
+
         element.onpointerdown =
             guarded(
                 event => {
+
+                    event.preventDefault();
 
                     if (
                         !status.serial?.connected
@@ -1071,19 +1078,13 @@ document
             );
 
 
-        for (
-            const eventName
-            of [
-                'pointerup',
-                'pointercancel'
-            ]
-        )
-        {
-            element.addEventListener(
-                eventName,
-                guarded(stopJog)
-            );
-        }
+        // Only a real button/key OFF stops normal manual movement. A browser
+        // pointercancel is not treated as OFF because it can occur from gesture
+        // arbitration even while the operator is still holding the control.
+        element.addEventListener(
+            'pointerup',
+            guarded(stopJog)
+        );
     });
 
 

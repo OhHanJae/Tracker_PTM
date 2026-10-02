@@ -165,7 +165,7 @@ DEFAULT_DRAWING_DIR = Path(r"C:\Users\gram\Desktop\트래커 관련\도면 이�
 STARTUP_BAUDRATE = 9600
 STARTUP_SCAN_TIMEOUT_MS = 200
 STARTUP_SCAN_DELAY_MS = 250
-PELCOD_MANUAL_REFRESH_MS = 5000
+PELCOD_MANUAL_REFRESH_MS = 1000
 PELCOD_MIN_DYNAMIC_UPDATE_S = 0.35
 
 
@@ -390,11 +390,11 @@ class JogDial(QWidget):
         self.update()
 
     def leaveEvent(self, event) -> None:  # noqa: ANN001 - Qt override signature
-        del event
-        if self._active_direction in self._DIRECTION_MAP:
-            self.jog_released.emit()
-        self._active_direction = None
-        self.update()
+        # Do not interpret cursor-leave as key OFF. Qt keeps the mouse grabbed
+        # while a button is pressed, so mouseReleaseEvent remains the real OFF.
+        # This prevents a held manual JOG from stopping if the cursor drifts
+        # outside the dial before the operator releases the mouse button.
+        super().leaveEvent(event)
 
     def _emit_direction(self, direction: str | None) -> None:
         if direction == "center":
@@ -502,8 +502,9 @@ class MainWindow(QMainWindow):
         self.laser_timer.timeout.connect(self._laser_off)
         self.jog_keepalive = QTimer(self)
         # Pelco-D runaway protection typically stops unattended motion after
-        # roughly 15 s.  Refresh an intentionally active manual command every
-        # five seconds; otherwise movement is stopped only by release/STOP.
+        # at a device-dependent interval. PT503 field behavior can stop sooner than
+        # generic Pelco guidance, so refresh an active manual command every 1 s.
+        # Release/STOP remains the authoritative software stop condition.
         self.jog_keepalive.setInterval(PELCOD_MANUAL_REFRESH_MS)
         self.jog_keepalive.timeout.connect(self._repeat_jog)
         self.api_jog_watchdog = QTimer(self)
@@ -3720,8 +3721,8 @@ class MainWindow(QMainWindow):
                 TiltDirection.DOWN: TiltDirection.UP,
             }.get(tilt, tilt)
         self.current_jog = (pan, tilt)
-        # Send immediately, then only every five seconds for Pelco runaway
-        # protection. Release/STOP remains the authoritative stop condition.
+        # Send immediately, then refresh once per second while the operator keeps
+        # manual JOG active. Release/STOP remains the authoritative stop condition.
         self._repeat_jog()
         if self.is_connected:
             self.jog_keepalive.start()

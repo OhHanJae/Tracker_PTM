@@ -67,10 +67,10 @@ class RemoteClientWindow(QMainWindow):
         self.reconnect_timer.setInterval(2000)
         self.reconnect_timer.timeout.connect(self._retry_server_connection)
         self.jog_timer = QTimer(self)
-        # Compatibility timer kept stopped. The hardware-owning server refreshes
-        # active Pelco-D manual motion every five seconds; clients send only
-        # start/change/STOP transitions.
-        self.jog_timer.setInterval(5000)
+        # Client-side liveness refresh. Matching JOG requests are deduplicated by the
+        # hardware-owning server, while the physical Pelco motion is refreshed
+        # once per second until release/STOP.
+        self.jog_timer.setInterval(1000)
         self.jog_timer.timeout.connect(self._send_current_jog)
 
         self.gamepad_manager = GamepadManager(self)
@@ -475,6 +475,11 @@ class RemoteClientWindow(QMainWindow):
     def _start_jog(self, pan: str, tilt: str) -> None:
         self._current_jog = (pan, tilt)
         self._send_current_jog()
+        # Keep the manual ON state alive until button release/STOP. Matching
+        # requests are deduplicated server-side, while the server refreshes the
+        # physical Pelco motion command at its own safe interval.
+        if not self.jog_timer.isActive():
+            self.jog_timer.start()
 
     def _send_current_jog(self) -> None:
         if self._current_jog is None:
