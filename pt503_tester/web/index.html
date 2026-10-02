@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="ko">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>BIT-PT503 제어</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+    <header>
+        <h1>BIT-PT503 / PT510</h1><span id="connection">연결 안 됨</span><button id="stopAll" class="danger">■ STOP</button>
+    </header>
+    <nav id="tabs"></nav>
+    <div id="notice" role="status" aria-live="polite"></div>
+    <main>
+        <section id="connectionPage" class="page" hidden>
+            <h2>PT503 포트·연결</h2>
+            <section class="connection"><label>포트<select id="port"></select></label><button id="ports"
+                    title="포트 새로고침">↻</button><label>Baud<select id="baud">
+                        <option>2400</option>
+                        <option>4800</option>
+                        <option selected>9600</option>
+                        <option>19200</option>
+                    </select></label><label>주소<input id="address" type="number" min="1" max="255"
+                        value="1"></label><button id="savePortSettings">설정 저장</button><button id="connect">연결</button><button
+                    id="disconnect">연결 해제</button><button id="scan">9600 자동탐색</button><button
+                    id="scanCancel">탐색 중지</button></section>
+            <p>포트 설정은 서버에 저장되며 새로고침 및 서버 재시작 후에도 유지됩니다. COM 장치는 서버만 사용합니다.</p>
+        </section>
+        <section id="manual" class="page">
+            <div class="columns">
+                <section>
+                    <h2>현재 위치</h2>
+                    <div class="readouts"><label>Pan<output id="actualPan">—</output></label><label>Tilt<output
+                                id="actualTilt">—</output></label></div><output id="motionState">idle</output><button
+                        data-command="position.get">위치 조회</button>
+                    <h2>수동 조작</h2>
+                    <div class="fields"><label>Pan 속도<select id="panLevel"></select></label><label>Tilt 속도<select
+                                id="tiltLevel"></select></label></div>
+                    <div class="dial"><button class="up" data-pan="stop" data-tilt="up" title="위">▲</button><button
+                            class="left" data-pan="left" data-tilt="stop" title="왼쪽">◀</button><button class="right"
+                            data-pan="right" data-tilt="stop" title="오른쪽">▶</button><button class="down" data-pan="stop"
+                            data-tilt="down" title="아래">▼</button><button class="center" id="dialStop"
+                            title="정지">■</button></div>
+                </section>
+                <section>
+                    <h2>절대좌표 이동</h2>
+                    <form id="absolute">
+                        <div class="fields"><label>Pan °<input name="pan" type="number" min="0" max="359.99" step=".01"
+                                    value="0" required></label><label>Tilt °<input name="tilt" type="number" min="-60"
+                                    max="60" step=".01" value="0" required></label></div><button>목표
+                            이동</button><output>최고속도</output>
+                    </form>
+                    <h2>위치 모니터링</h2>
+                    <form id="monitor"><label><input name="enabled" type="checkbox">자동 조회</label><label>주기 ms<input
+                                name="interval_ms" type="number" min="350" max="5000"
+                                value="500"></label><button>적용</button></form>
+                    <h2>이동 완료 판정</h2>
+                    <form id="completion"><label>허용오차 °<input name="tolerance_deg" type="number" min=".01" max="10"
+                                step=".01" value=".2"></label><label>연속 샘플<input name="stable_samples" type="number"
+                                min="1" max="10" value="3"></label><label>제한시간 s<input name="timeout_s" type="number"
+                                min="2" max="120" value="30"></label><button>적용</button></form>
+                </section>
+            </div>
+        </section>
+        <section id="recipes" class="page" hidden>
+            <div class="toolbar"><select id="recipeSelect" aria-label="레시피"></select><button id="newRecipe">레시피
+                    추가</button><button id="editRecipe">레시피 수정</button><button id="deleteRecipe" class="danger">레시피
+                    삭제</button><button id="exportRecipe" type="button">파일 내보내기</button><button id="importRecipe"
+                    type="button">파일 불러오기</button><input id="recipeFile" type="file" accept="application/json,.json"
+                    hidden></div>
+            <p id="recipeDescription"></p>
+            <output id="selectedPointStatus">선택 포인트: -</output>
+            <div class="toolbar"><button id="runRecipeSequence" type="button">1번부터 순차 테스트</button><button
+                    id="runRecipeRandom" type="button">랜덤 반복 시작</button><button id="stopRecipeTest" type="button"
+                    class="danger" disabled>테스트 정지</button><output id="recipeTestStatus">대기</output></div>
+            <div class="table-scroll">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>이름</th>
+                            <th>Pan °</th>
+                            <th>Tilt °</th>
+                            <th>추정 XYZ</th>
+                            <th>대기 ms</th>
+                            <th>사용</th>
+                            <th>메모</th>
+                            <th>작업</th>
+                        </tr>
+                    </thead>
+                    <tbody id="points"></tbody>
+                </table>
+            </div>
+            <h2 id="pointTitle">포인트 추가</h2>
+            <form id="pointForm">
+                <div class="fields"><label>이름<input name="name" required></label><label>Pan °<input name="pan"
+                            type="number" min="0" max="359.99" step=".01" required></label><label>Tilt °<input
+                            name="tilt" type="number" min="-60" max="60" step=".01" required></label><label>대기 ms<input
+                            name="dwell_ms" type="number" min="0" max="3600000" value="0"></label><label><input
+                            name="enabled" type="checkbox" checked>사용</label><label>메모<input name="note"></label></div>
+                <div class="toolbar"><button>저장</button><button type="button" id="capture">현재 위치 가져오기</button><button
+                        type="button" id="newPoint">새 포인트</button></div>
+            </form>
+        </section>
+        <section id="drawings" class="page" hidden>
+            <div class="toolbar">
+                <select id="drawingSelect" aria-label="도면 선택"></select>
+                <button id="loadDrawing" type="button">도면 선택</button>
+                <button id="manageDrawings" type="button">도면 관리</button>
+                <output id="drawingStatus">data/drawning 도면을 선택하세요.</output>
+            </div>
+            <div class="drawing-calibration-layout">
+                <section class="drawing-view-panel">
+                    <div class="toolbar cad-views">
+                        <button data-cad-view="top" type="button">위</button><button data-cad-view="bottom" type="button">아래</button>
+                        <button data-cad-view="front" type="button">앞</button><button data-cad-view="back" type="button">뒤</button>
+                        <button data-cad-view="left" type="button">좌</button><button data-cad-view="right" type="button">우</button>
+                        <button data-cad-view="reset" type="button">초기화</button>
+                        <label><input id="cadLabels" type="checkbox">포인트 ID 보이기</label>
+                    </div>
+                    <div id="cadStage" class="cad-stage"><canvas id="cadCanvas"></canvas><div id="cadPointLayer"></div></div>
+                    <pre id="cadSelection">도면 포인트를 선택하세요.</pre>
+                    <output id="drawingInfo">도면 없음</output>
+                </section>
+                <aside class="drawing-calibration-panel">
+                    <h2>도면 포인트 설정</h2>
+                    <div id="drawingPointSets" class="cad-groups"></div>
+                    <p id="drawingCalibrationInfo">포인트 설정 파일을 선택하고 기준점 4~10개에 현재 Pan/Tilt를 적용하세요.</p>
+                    <div class="toolbar">
+                        <button id="applyCurrentDrawingPoint" type="button">현재값으로 적용</button>
+                        <button id="toggleCalibrationPoint" type="button">캘리브레이션 포인트로 선택</button>
+                        <button id="calibrateDrawing" type="button">캘리브레이션</button>
+                    </div>
+                    <div class="toolbar">
+                        <button id="exportDrawingRecipe" type="button">레시피로 저장</button>
+                        <button id="importDrawingRecipe" type="button">레시피에서 불러오기</button>
+                    </div>
+                    <div class="table-scroll drawing-point-scroll">
+                        <table class="drawing-point-table">
+                            <thead><tr><th>#</th><th>Target ID</th><th>X</th><th>Y</th><th>Z</th><th>기준</th><th>Pan</th><th>Tilt</th></tr></thead>
+                            <tbody id="drawingPoints"></tbody>
+                        </table>
+                    </div>
+                    <p class="cad-warning">좌표는 mm로 보존되며 GLB 렌더링에만 ×0.1을 적용합니다. contact-Z 미인증 값은 실제 체결 깊이로 사용하지 않습니다.</p>
+                </aside>
+            </div>
+            <dialog id="drawingRecipeDialog">
+                <form method="dialog" class="recipe-dialog-form">
+                    <h2 id="drawingRecipeDialogTitle">레시피 선택</h2>
+                    <label>기존 레시피<select id="drawingRecipeSelect"></select></label>
+                    <label id="drawingNewRecipeLabel">새 레시피 이름<input id="drawingNewRecipeName" placeholder="비우면 기존 레시피 사용"></label>
+                    <div class="toolbar"><button id="confirmDrawingRecipe" value="confirm" type="button">확인</button><button value="cancel">취소</button></div>
+                </form>
+            </dialog>
+            <dialog id="drawingManagerDialog">
+                <form method="dialog" class="drawing-manager-form">
+                    <div class="dialog-heading">
+                        <div><h2>도면 관리</h2><p>GLB 도면, coordinates_manifest.json, manifest에 등록된 group_*.json 파일을 함께 선택하세요.</p></div>
+                        <button value="cancel" type="submit">닫기</button>
+                    </div>
+                    <label class="drawing-file-picker">도면·포인트 파일
+                        <input id="drawingFile" type="file" accept=".glb,.json" multiple>
+                    </label>
+                    <div class="toolbar"><button id="uploadDrawing" type="button">파일 등록</button></div>
+                    <section id="drawingProgressPanel" class="drawing-progress" hidden>
+                        <div class="drawing-progress-head"><strong id="drawingProgressStage">대기</strong><span id="drawingProgressPercent">0%</span></div>
+                        <progress id="drawingProgressBar" max="100" value="0"></progress>
+                        <div id="drawingProgressDetail"></div>
+                    </section>
+                    <div id="drawingManagerList" class="drawing-manager-list"></div>
+                </form>
+            </dialog>
+        </section>
+        <section id="gamepad" class="page" hidden>
+            <h2>게임패드</h2>
+            <p id="padName">연결된 게임패드 없음</p>
+            <div class="toolbar"><select id="padSelect" aria-label="게임패드 선택"></select><button id="padRefresh"
+                    type="button">감지</button><button id="padConnect" type="button">연결</button><button id="padDisconnect"
+                    type="button">해제</button></div><output id="padStatus">대기</output><label><input id="padEnable"
+                    type="checkbox">게임패드 조작 허용</label>
+            <div class="fields"><label>Pan 축<input id="padX" type="number" min="0" max="15"
+                        value="2"></label><label>Tilt 축<input id="padY" type="number" min="0" max="15"
+                        value="5"></label><label><input id="padInvertX" type="checkbox">Pan 반전</label><label><input
+                        id="padInvertY" type="checkbox">Tilt 반전</label></div>
+            <pre id="padValues"></pre>
+        </section>
+        <section id="laser" class="page" hidden>
+            <h2>레이저 모듈</h2><output id="laserState">OFF</output>
+            <div class="toolbar">
+                <button data-command="laser.arm" data-params='{"enabled":true}'>ARM</button>
+                <button data-command="laser.arm" data-params='{"enabled":false}'>ARM 해제</button>
+                <button data-command="laser.on">ON</button><button data-command="laser.off">OFF</button>
+            </div>
+            <form id="pulse"><label>펄스 ms<input name="duration_ms" type="number" min="50" max="60000"
+                        value="500"></label><button>펄스 출력</button></form>
+        </section>
+        <section id="protocol" class="page" hidden>
+            <h2>프로토콜 / API</h2>
+            <div class="protocol-layout">
+                <aside id="commandGroups" class="protocol-sidebar" aria-label="명령 분류"></aside>
+                <aside id="commandList" class="protocol-command-list" aria-label="명령 목록"></aside>
+                <section class="protocol-command-panel">
+                    <h3 id="commandTitle">명령을 선택하세요</h3>
+                    <p id="commandDescription">왼쪽 분류와 명령을 선택하면 설명과 입력 항목이 표시됩니다.</p>
+                    <form id="commandForm">
+                        <div id="commandFields" class="fields"></div><button>실행</button>
+                    </form>
+                    <details>
+                        <summary>JSON 매개변수</summary><textarea id="jsonParams" rows="8" spellcheck="false"></textarea><button
+                            id="sendJson" type="button">JSON 실행</button>
+                    </details>
+                    <pre id="commandResult"></pre>
+                </section>
+            </div>
+        </section>
+        <section id="logs" class="page" hidden>
+            <div class="toolbar"><button id="exportLogs">로그 다운로드</button><button id="clearLogs">화면 지우기</button></div>
+            <div class="table-scroll">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>시각</th>
+                            <th>구분</th>
+                            <th>내용</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logRows"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+    <script src="/templates.js"></script>
+    <script src="/app.js"></script>
+    <script type="importmap">
+        {"imports":{"three":"/cad/vendor/three.module.js"}}
+    </script>
+    <script type="module" src="/cad/app.js"></script>
+</body>
+
+</html>

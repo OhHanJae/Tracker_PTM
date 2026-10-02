@@ -1,0 +1,2 @@
+# Headless API and web console: no Qt, SDL or display-server dependency.
+pyserial>=3.5,<4

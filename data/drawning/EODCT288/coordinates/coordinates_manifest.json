@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "product_id": "EODCT288",
+  "coordinate_frame": "PRODUCT_CAD_STEP_NATIVE",
+  "units": "mm",
+  "model_rendering": {
+    "model_units": "cm",
+    "model_units_per_mm": 0.1,
+    "coordinate_values_are_not_modified": true
+  },
+  "groups": [
+    {
+      "group_id": 1,
+      "name": "rear_r13_r14",
+      "point_count": 71,
+      "file": "group_1_rear_r13_r14.json",
+      "csv_file": "group_1_rear_r13_r14.csv",
+      "default_enabled": true,
+      "requires_process_review": false
+    },
+    {
+      "group_id": 2,
+      "name": "front_outer",
+      "point_count": 78,
+      "file": "group_2_front_outer.json",
+      "csv_file": "group_2_front_outer.csv",
+      "default_enabled": true,
+      "requires_process_review": true
+    },
+    {
+      "group_id": 3,
+      "name": "front_inner",
+      "point_count": 60,
+      "file": "group_3_front_inner.json",
+      "csv_file": "group_3_front_inner.csv",
+      "default_enabled": false,
+      "requires_process_review": true
+    }
+  ]
+}

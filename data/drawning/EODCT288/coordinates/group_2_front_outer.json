@@ -1,0 +1,1682 @@
+{
+  "schema_version": 1,
+  "product_id": "EODCT288",
+  "coordinate_frame": "PRODUCT_CAD_STEP_NATIVE",
+  "units": "mm",
+  "group": {
+    "group_id": 2,
+    "group_name": "front_outer",
+    "default_enabled": true,
+    "possible_non_fastening_features": false,
+    "axis_xyz": [
+      0.0,
+      0.0,
+      -1.0
+    ],
+    "view_axis_xyz": [
+      0.0,
+      0.0,
+      1.0
+    ],
+    "status": "candidate_requires_review",
+    "contact_z_certified": false,
+    "cylindrical_radius_mm": 4.325,
+    "reference_z_mm": -109.83
+  },
+  "source": {
+    "repository_path": "examples/cad/eodct288_fastening_groups_2_3.candidate.json",
+    "source_units": "mm",
+    "conversion": "none",
+    "source_step": "FVP.stp"
+  },
+  "points": [
+    {
+      "target_id": "G2-001",
+      "source_point_id": "2-001",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        616.536,
+        642.817,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-002",
+      "source_point_id": "2-002",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        683.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-003",
+      "source_point_id": "2-003",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        783.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-004",
+      "source_point_id": "2-004",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        883.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-005",
+      "source_point_id": "2-005",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        983.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-006",
+      "source_point_id": "2-006",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1083.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-007",
+      "source_point_id": "2-007",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1183.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-008",
+      "source_point_id": "2-008",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1283.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-009",
+      "source_point_id": "2-009",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1383.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-010",
+      "source_point_id": "2-010",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1483.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-011",
+      "source_point_id": "2-011",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1583.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-012",
+      "source_point_id": "2-012",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1683.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-013",
+      "source_point_id": "2-013",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1783.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-014",
+      "source_point_id": "2-014",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1883.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-015",
+      "source_point_id": "2-015",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1983.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-016",
+      "source_point_id": "2-016",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2083.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-017",
+      "source_point_id": "2-017",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2183.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-018",
+      "source_point_id": "2-018",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2283.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-019",
+      "source_point_id": "2-019",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2383.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-020",
+      "source_point_id": "2-020",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2544.448,
+        642.356,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-021",
+      "source_point_id": "2-021",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2605.463,
+        563.127,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-022",
+      "source_point_id": "2-022",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2655.19,
+        498.555,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-023",
+      "source_point_id": "2-023",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2684.5,
+        442.9,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-024",
+      "source_point_id": "2-024",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2684.5,
+        352.9,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-025",
+      "source_point_id": "2-025",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2684.5,
+        262.9,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-026",
+      "source_point_id": "2-026",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2684.5,
+        172.9,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-027",
+      "source_point_id": "2-027",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2658.5,
+        146.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-028",
+      "source_point_id": "2-028",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2626.8,
+        123.75,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-029",
+      "source_point_id": "2-029",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2626.8,
+        41.25,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-030",
+      "source_point_id": "2-030",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2626.8,
+        -41.25,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-031",
+      "source_point_id": "2-031",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2626.8,
+        -123.75,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-032",
+      "source_point_id": "2-032",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2658.5,
+        -146.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-033",
+      "source_point_id": "2-033",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2684.5,
+        -172.9,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-034",
+      "source_point_id": "2-034",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2684.5,
+        -262.9,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-035",
+      "source_point_id": "2-035",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2684.5,
+        -352.9,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-036",
+      "source_point_id": "2-036",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2684.5,
+        -442.9,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-037",
+      "source_point_id": "2-037",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2655.19,
+        -498.556,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-038",
+      "source_point_id": "2-038",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2605.463,
+        -563.128,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-039",
+      "source_point_id": "2-039",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2544.448,
+        -642.357,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-040",
+      "source_point_id": "2-040",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2483.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-041",
+      "source_point_id": "2-041",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2383.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-042",
+      "source_point_id": "2-042",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2283.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-043",
+      "source_point_id": "2-043",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2183.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-044",
+      "source_point_id": "2-044",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2083.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-045",
+      "source_point_id": "2-045",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1983.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-046",
+      "source_point_id": "2-046",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1883.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-047",
+      "source_point_id": "2-047",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1783.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-048",
+      "source_point_id": "2-048",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1683.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-049",
+      "source_point_id": "2-049",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1583.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-050",
+      "source_point_id": "2-050",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1483.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-051",
+      "source_point_id": "2-051",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1383.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-052",
+      "source_point_id": "2-052",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1283.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-053",
+      "source_point_id": "2-053",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1183.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-054",
+      "source_point_id": "2-054",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        1083.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-055",
+      "source_point_id": "2-055",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        983.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-056",
+      "source_point_id": "2-056",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        883.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-057",
+      "source_point_id": "2-057",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        783.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-058",
+      "source_point_id": "2-058",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        616.536,
+        -642.817,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-059",
+      "source_point_id": "2-059",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        555.522,
+        -563.588,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-060",
+      "source_point_id": "2-060",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        494.507,
+        -484.36,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-061",
+      "source_point_id": "2-061",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        464.0,
+        -403.9,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-062",
+      "source_point_id": "2-062",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        464.0,
+        -303.9,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-063",
+      "source_point_id": "2-063",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        464.0,
+        -203.9,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-064",
+      "source_point_id": "2-064",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        565.5,
+        -166.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-065",
+      "source_point_id": "2-065",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        491.5,
+        -166.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-066",
+      "source_point_id": "2-066",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        587.0,
+        -146.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-067",
+      "source_point_id": "2-067",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        587.0,
+        -46.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-068",
+      "source_point_id": "2-068",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        587.0,
+        46.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-069",
+      "source_point_id": "2-069",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        587.0,
+        146.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-070",
+      "source_point_id": "2-070",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        491.5,
+        166.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-071",
+      "source_point_id": "2-071",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        565.5,
+        166.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-072",
+      "source_point_id": "2-072",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        464.0,
+        203.9,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-073",
+      "source_point_id": "2-073",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        464.0,
+        303.9,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-074",
+      "source_point_id": "2-074",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        464.0,
+        403.9,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-075",
+      "source_point_id": "2-075",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        494.507,
+        484.359,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-076",
+      "source_point_id": "2-076",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        555.522,
+        563.588,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "primary_match_signature"
+    },
+    {
+      "target_id": "G2-077",
+      "source_point_id": "2-077",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        2483.0,
+        664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "repeated_row_pattern_exception",
+      "source_geometry": {
+        "coaxial_cylindrical_radius_mm": 4.0,
+        "cylindrical_reference_z_mm": -112.95,
+        "projection_group_reference_z_mm": -109.83
+      }
+    },
+    {
+      "target_id": "G2-078",
+      "source_point_id": "2-078",
+      "group_id": 2,
+      "group_name": "front_outer",
+      "xyz_mm": [
+        683.0,
+        -664.0,
+        -109.83
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate_requires_review",
+      "possible_non_fastening_features": false,
+      "selection_basis": "repeated_row_pattern_exception",
+      "source_geometry": {
+        "coaxial_cylindrical_radius_mm": 4.0,
+        "cylindrical_reference_z_mm": -112.95,
+        "projection_group_reference_z_mm": -109.83
+      }
+    }
+  ]
+}

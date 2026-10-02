@@ -1,0 +1,1604 @@
+{
+  "schema_version": 1,
+  "product_id": "EODCT288",
+  "coordinate_frame": "PRODUCT_CAD_STEP_NATIVE",
+  "units": "mm",
+  "group": {
+    "group_id": 1,
+    "group_name": "rear_r13_r14",
+    "default_enabled": true,
+    "possible_non_fastening_features": false,
+    "axis_xyz": [
+      0.0,
+      0.0,
+      -1.0
+    ],
+    "view_axis_xyz": [
+      0.0,
+      0.0,
+      1.0
+    ],
+    "status": "candidate",
+    "contact_z_certified": false,
+    "equipment_regions": [
+      {
+        "name": "R13",
+        "point_count": 36
+      },
+      {
+        "name": "R14",
+        "point_count": 35
+      }
+    ]
+  },
+  "source": {
+    "repository_path": "examples/cad/eodct288_fastening_targets.candidate.json",
+    "source_units": "cm",
+    "conversion": "x_mm=x_cm*10; y_mm=y_cm*10; z_mm=z_cm*10",
+    "source_step": "FVP STEP cylindrical-surface center extraction"
+  },
+  "points": [
+    {
+      "target_id": "R13-01",
+      "source_point_id": "F008",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1578.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 1
+    },
+    {
+      "target_id": "R13-02",
+      "source_point_id": "F007",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1478.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 2
+    },
+    {
+      "target_id": "R13-03",
+      "source_point_id": "F006",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1378.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 3
+    },
+    {
+      "target_id": "R13-04",
+      "source_point_id": "F005",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1278.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 4
+    },
+    {
+      "target_id": "R13-05",
+      "source_point_id": "F019",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1178.0,
+        667.5,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 5
+    },
+    {
+      "target_id": "R13-06",
+      "source_point_id": "F004",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1078.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 6
+    },
+    {
+      "target_id": "R13-07",
+      "source_point_id": "F003",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        978.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 7
+    },
+    {
+      "target_id": "R13-08",
+      "source_point_id": "F018",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        878.0,
+        667.5,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 8
+    },
+    {
+      "target_id": "R13-09",
+      "source_point_id": "F002",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        778.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 9
+    },
+    {
+      "target_id": "R13-10",
+      "source_point_id": "F001",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        678.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 10
+    },
+    {
+      "target_id": "R13-11",
+      "source_point_id": "F020",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        612.72903,
+        644.4297,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 11
+    },
+    {
+      "target_id": "R13-12",
+      "source_point_id": "F023",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        551.71452,
+        565.20073,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 12
+    },
+    {
+      "target_id": "R13-13",
+      "source_point_id": "F025",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        490.7,
+        485.97177,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 13
+    },
+    {
+      "target_id": "R13-14",
+      "source_point_id": "F027",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        460.0,
+        433.8,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 14
+    },
+    {
+      "target_id": "R13-15",
+      "source_point_id": "F028",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        460.0,
+        348.8,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 15
+    },
+    {
+      "target_id": "R13-16",
+      "source_point_id": "F030",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        460.0,
+        263.8,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 16
+    },
+    {
+      "target_id": "R13-17",
+      "source_point_id": "F032",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        460.0,
+        178.8,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 17
+    },
+    {
+      "target_id": "R13-18",
+      "source_point_id": "F034",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        460.0,
+        118.8,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 18
+    },
+    {
+      "target_id": "R13-19",
+      "source_point_id": "F038",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        460.0,
+        -118.8,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 19
+    },
+    {
+      "target_id": "R13-20",
+      "source_point_id": "F040",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        460.0,
+        -178.8,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 20
+    },
+    {
+      "target_id": "R13-21",
+      "source_point_id": "F042",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        460.0,
+        -263.8,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 21
+    },
+    {
+      "target_id": "R13-22",
+      "source_point_id": "F044",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        460.0,
+        -348.8,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 22
+    },
+    {
+      "target_id": "R13-23",
+      "source_point_id": "F045",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        460.0,
+        -433.8,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 23
+    },
+    {
+      "target_id": "R13-24",
+      "source_point_id": "F047",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        490.7,
+        -485.97177,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 24
+    },
+    {
+      "target_id": "R13-25",
+      "source_point_id": "F049",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        551.71452,
+        -565.20073,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 25
+    },
+    {
+      "target_id": "R13-26",
+      "source_point_id": "F052",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        612.72903,
+        -644.4297,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 26
+    },
+    {
+      "target_id": "R13-27",
+      "source_point_id": "F053",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        678.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 27
+    },
+    {
+      "target_id": "R13-28",
+      "source_point_id": "F054",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        778.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 28
+    },
+    {
+      "target_id": "R13-29",
+      "source_point_id": "F055",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        878.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 29
+    },
+    {
+      "target_id": "R13-30",
+      "source_point_id": "F056",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        978.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 30
+    },
+    {
+      "target_id": "R13-31",
+      "source_point_id": "F057",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1078.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 31
+    },
+    {
+      "target_id": "R13-32",
+      "source_point_id": "F058",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1178.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 32
+    },
+    {
+      "target_id": "R13-33",
+      "source_point_id": "F059",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1278.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 33
+    },
+    {
+      "target_id": "R13-34",
+      "source_point_id": "F060",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1378.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 34
+    },
+    {
+      "target_id": "R13-35",
+      "source_point_id": "F061",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1478.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 35
+    },
+    {
+      "target_id": "R13-36",
+      "source_point_id": "F062",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1578.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R13",
+      "equipment_sequence": 36
+    },
+    {
+      "target_id": "R14-01",
+      "source_point_id": "F063",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1678.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 1
+    },
+    {
+      "target_id": "R14-02",
+      "source_point_id": "F064",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1778.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 2
+    },
+    {
+      "target_id": "R14-03",
+      "source_point_id": "F065",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1878.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 3
+    },
+    {
+      "target_id": "R14-04",
+      "source_point_id": "F066",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1978.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 4
+    },
+    {
+      "target_id": "R14-05",
+      "source_point_id": "F067",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2078.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 5
+    },
+    {
+      "target_id": "R14-06",
+      "source_point_id": "F068",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2178.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 6
+    },
+    {
+      "target_id": "R14-07",
+      "source_point_id": "F069",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2278.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 7
+    },
+    {
+      "target_id": "R14-08",
+      "source_point_id": "F070",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2378.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 8
+    },
+    {
+      "target_id": "R14-09",
+      "source_point_id": "F071",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2478.0,
+        -668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 9
+    },
+    {
+      "target_id": "R14-10",
+      "source_point_id": "F051",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2549.67398,
+        -642.12629,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 10
+    },
+    {
+      "target_id": "R14-11",
+      "source_point_id": "F050",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2604.58699,
+        -570.82018,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 11
+    },
+    {
+      "target_id": "R14-12",
+      "source_point_id": "F048",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2659.5,
+        -499.51407,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 12
+    },
+    {
+      "target_id": "R14-13",
+      "source_point_id": "F046",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2688.0,
+        -436.655,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 13
+    },
+    {
+      "target_id": "R14-14",
+      "source_point_id": "F043",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2688.0,
+        -346.655,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 14
+    },
+    {
+      "target_id": "R14-15",
+      "source_point_id": "F041",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2688.0,
+        -256.655,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 15
+    },
+    {
+      "target_id": "R14-16",
+      "source_point_id": "F039",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2688.0,
+        -166.655,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 16
+    },
+    {
+      "target_id": "R14-17",
+      "source_point_id": "F037",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2630.8,
+        -100.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 17
+    },
+    {
+      "target_id": "R14-18",
+      "source_point_id": "F036",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2630.8,
+        8.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 18
+    },
+    {
+      "target_id": "R14-19",
+      "source_point_id": "F035",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2630.8,
+        100.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 19
+    },
+    {
+      "target_id": "R14-20",
+      "source_point_id": "F033",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2688.0,
+        166.655,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 20
+    },
+    {
+      "target_id": "R14-21",
+      "source_point_id": "F031",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2688.0,
+        256.655,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 21
+    },
+    {
+      "target_id": "R14-22",
+      "source_point_id": "F029",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2688.0,
+        346.655,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 22
+    },
+    {
+      "target_id": "R14-23",
+      "source_point_id": "F026",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2688.0,
+        436.655,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 23
+    },
+    {
+      "target_id": "R14-24",
+      "source_point_id": "F024",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2659.5,
+        499.51407,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 24
+    },
+    {
+      "target_id": "R14-25",
+      "source_point_id": "F022",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2604.58699,
+        570.82018,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 25
+    },
+    {
+      "target_id": "R14-26",
+      "source_point_id": "F021",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2549.67361,
+        642.12689,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 26
+    },
+    {
+      "target_id": "R14-27",
+      "source_point_id": "F017",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2478.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 27
+    },
+    {
+      "target_id": "R14-28",
+      "source_point_id": "F016",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2378.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 28
+    },
+    {
+      "target_id": "R14-29",
+      "source_point_id": "F015",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2278.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 29
+    },
+    {
+      "target_id": "R14-30",
+      "source_point_id": "F014",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2178.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 30
+    },
+    {
+      "target_id": "R14-31",
+      "source_point_id": "F013",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        2078.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 31
+    },
+    {
+      "target_id": "R14-32",
+      "source_point_id": "F012",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1978.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 32
+    },
+    {
+      "target_id": "R14-33",
+      "source_point_id": "F011",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1878.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 33
+    },
+    {
+      "target_id": "R14-34",
+      "source_point_id": "F010",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1778.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 34
+    },
+    {
+      "target_id": "R14-35",
+      "source_point_id": "F009",
+      "group_id": 1,
+      "group_name": "rear_r13_r14",
+      "xyz_mm": [
+        1678.0,
+        668.0,
+        -200.2
+      ],
+      "axis_xyz": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "contact_z_certified": false,
+      "enabled": true,
+      "status": "candidate",
+      "possible_non_fastening_features": false,
+      "equipment_region": "R14",
+      "equipment_sequence": 35
+    }
+  ]
+}
