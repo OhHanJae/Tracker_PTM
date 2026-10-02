@@ -55,6 +55,8 @@ class SerialWorker(QThread):
         self._active_config: SerialConfig | None = None
         self._rx_accumulator = bytearray()
         self._last_rx_time = 0.0
+        self._last_tx_time = 0.0
+        self._min_command_gap_s = 0.32
 
     # These methods are safe to call from the GUI thread.
     def request_open(self, config: SerialConfig) -> None:
@@ -153,6 +155,7 @@ class SerialWorker(QThread):
 
         self._active_config = config
         self._rx_accumulator.clear()
+        self._last_tx_time = 0.0
         self.connected.emit(config.port, config.baudrate, config.address)
 
     def _close(self, reason: str, send_stop: bool, notify: bool = True) -> None:
@@ -178,6 +181,7 @@ class SerialWorker(QThread):
         self._serial = None
         self._active_config = None
         self._rx_accumulator.clear()
+        self._last_tx_time = 0.0
         if notify:
             self.disconnected.emit(reason)
 
@@ -186,9 +190,18 @@ class SerialWorker(QThread):
             self.error.emit("COM 포트가 연결되지 않았습니다.")
             return
         try:
+            # Pelco-D guidance requires a deliberate gap between commands.  This
+            # also gives the PT unit time to finish its reply before another
+            # request or motion frame is placed on the bus.
+            now = time.perf_counter()
+            remaining = self._min_command_gap_s - (now - self._last_tx_time)
+            if self._last_tx_time and remaining > 0:
+                time.sleep(remaining)
+
             sent_at = time.perf_counter()
             written = self._serial.write(command.data)
             self._serial.flush()
+            self._last_tx_time = sent_at
             if written != len(command.data):
                 raise serial.SerialTimeoutException(
                     f"{len(command.data)}바이트 중 {written}바이트만 송신됨"

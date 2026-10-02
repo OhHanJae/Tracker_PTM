@@ -165,6 +165,8 @@ DEFAULT_DRAWING_DIR = Path(r"C:\Users\gram\Desktop\트래커 관련\도면 이�
 STARTUP_BAUDRATE = 9600
 STARTUP_SCAN_TIMEOUT_MS = 200
 STARTUP_SCAN_DELAY_MS = 250
+PELCOD_MANUAL_REFRESH_MS = 5000
+PELCOD_MIN_DYNAMIC_UPDATE_S = 0.35
 
 
 class SearchDialog(QDialog):
@@ -499,14 +501,15 @@ class MainWindow(QMainWindow):
         self.laser_timer.setSingleShot(True)
         self.laser_timer.timeout.connect(self._laser_off)
         self.jog_keepalive = QTimer(self)
-        # Legacy repeat timer is intentionally not started for manual JOG.
-        # BIT/Pelco-D manual motion is continuous until STOP; re-sending the same
-        # frame can create a visible hesitation on the PT503/PT510.
-        self.jog_keepalive.setInterval(60_000)
+        # Pelco-D runaway protection typically stops unattended motion after
+        # roughly 15 s.  Refresh an intentionally active manual command every
+        # five seconds; otherwise movement is stopped only by release/STOP.
+        self.jog_keepalive.setInterval(PELCOD_MANUAL_REFRESH_MS)
         self.jog_keepalive.timeout.connect(self._repeat_jog)
         self.api_jog_watchdog = QTimer(self)
-        self.api_jog_watchdog.setSingleShot(True)
-        self.api_jog_watchdog.timeout.connect(self._api_jog_timeout)
+        self.api_jog_watchdog.setSingleShot(False)
+        self.api_jog_watchdog.setInterval(PELCOD_MANUAL_REFRESH_MS)
+        self.api_jog_watchdog.timeout.connect(self._api_jog_keepalive)
 
         self._build_ui()
         self._configure_spin_boxes()
@@ -1522,8 +1525,8 @@ class MainWindow(QMainWindow):
         format_layout.addWidget(example)
         format_layout.addWidget(
             self._help_label(
-                "motion.jog는 duration_ms가 지나면 자동 STOP됩니다. Main APP이 연속 Jog를 원하면 "
-                "타임아웃 전에 같은 명령을 갱신해야 합니다. 전체 명령은 docs/EXTERNAL_API.md를 확인하세요."
+                "motion.jog는 연속 수동운전입니다. 같은 방향/속도는 서버가 약 5초마다 "
+                "Pelco-D runaway 보호용으로만 재전송하며, motion.stop 또는 제어 종료 시 정지합니다. 전체 명령은 docs/EXTERNAL_API.md를 확인하세요."
             )
         )
         layout.addWidget(format_group)
@@ -2816,9 +2819,6 @@ class MainWindow(QMainWindow):
         )
         pan_speed = manual_speed_value(pan_level)
         tilt_speed = manual_speed_value(tilt_level)
-        duration = self._api_int(
-            params, "duration_ms", 5000, minimum=500, maximum=10_000
-        )
         if pan is PanDirection.STOP and tilt is TiltDirection.STOP:
             self._emergency_stop()
             self.api_motion_owner = None
@@ -2826,19 +2826,10 @@ class MainWindow(QMainWindow):
             self.api_jog_watchdog.stop()
             return {"accepted": True, "stopped": True}
 
-        jog_key = (
-            pan,
-            tilt,
-            pan_speed if pan is not PanDirection.STOP else 0,
-            tilt_speed if tilt is not TiltDirection.STOP else 0,
-        )
-        refreshed = (
-            self.api_motion_owner == client_id
-            and self.api_jog_key == jog_key
-            and self.api_jog_watchdog.isActive()
-        )
+        jog_key = (pan, tilt, pan_speed, tilt_speed)
+        unchanged = self.api_motion_owner == client_id and self.api_jog_key == jog_key
 
-        if not refreshed:
+        if not unchanged:
             self._cancel_motion_tracking("API Jog가 시작됨")
             self._api_send(
                 manual_motion(self._address(), pan, tilt, pan_speed, tilt_speed)
@@ -2846,28 +2837,34 @@ class MainWindow(QMainWindow):
             self.api_jog_key = jog_key
 
         self.api_motion_owner = client_id
-        # Identical API keepalive: restart only the software watchdog.
-        self.api_jog_watchdog.start(duration)
+        if not unchanged or not self.api_jog_watchdog.isActive():
+            # Start/restart only for a real motion change. Duplicate requests
+            # from older clients do not postpone the 5 s Pelco refresh.
+            self.api_jog_watchdog.start()
         return {
             "accepted": True,
-            "refreshed": refreshed,
+            "continuous": True,
+            "unchanged": unchanged,
             "pan": pan_text,
             "tilt": tilt_text,
             "pan_level": pan_level,
             "tilt_level": tilt_level,
             "pan_percent": manual_speed_percent(pan_level),
             "tilt_percent": manual_speed_percent(tilt_level),
-            "watchdog_ms": duration,
+            "resend_interval_ms": PELCOD_MANUAL_REFRESH_MS,
         }
 
-    def _api_jog_timeout(self) -> None:
-        owner = self.api_motion_owner
-        self.api_motion_owner = None
-        self.api_jog_key = None
-        if self.is_connected:
-            self._emergency_stop()
-        self.api_server.broadcast(
-            "motion.jog_timeout", {"owner": owner, "reason": "watchdog expired"}
+    def _api_jog_keepalive(self) -> None:
+        if (
+            not self.is_connected
+            or self.api_motion_owner is None
+            or self.api_jog_key is None
+        ):
+            self.api_jog_watchdog.stop()
+            return
+        pan, tilt, pan_speed, tilt_speed = self.api_jog_key
+        self._api_send(
+            manual_motion(self._address(), pan, tilt, pan_speed, tilt_speed)
         )
 
     def _api_motion_absolute(
@@ -3543,9 +3540,12 @@ class MainWindow(QMainWindow):
             or abs(previous[3] - tilt_speed) >= 4
         )
         # Raw analog axes fluctuate slightly even while the user's hand is still.
-        # Do not turn that noise into a 25 Hz stream of Pelco-D motor commands.
-        speed_update_due = speed_changed and (now - self.gamepad_last_send >= 0.20)
-        should_send = direction_changed or speed_update_due
+        # Respect Pelco-D command spacing for real speed changes, and resend a
+        # stable command only every five seconds for runaway protection.
+        elapsed = now - self.gamepad_last_send
+        speed_update_due = speed_changed and elapsed >= PELCOD_MIN_DYNAMIC_UPDATE_S
+        keepalive_due = previous is not None and elapsed >= (PELCOD_MANUAL_REFRESH_MS / 1000.0)
+        should_send = direction_changed or speed_update_due or keepalive_due
 
         if should_send:
             self.api_jog_watchdog.stop()
@@ -3720,8 +3720,11 @@ class MainWindow(QMainWindow):
                 TiltDirection.DOWN: TiltDirection.UP,
             }.get(tilt, tilt)
         self.current_jog = (pan, tilt)
-        # One continuous Pelco-D JOG frame; STOP is sent on release.
+        # Send immediately, then only every five seconds for Pelco runaway
+        # protection. Release/STOP remains the authoritative stop condition.
         self._repeat_jog()
+        if self.is_connected:
+            self.jog_keepalive.start()
 
     def _repeat_jog(self) -> None:
         if not self.current_jog:

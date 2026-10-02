@@ -67,10 +67,10 @@ class RemoteClientWindow(QMainWindow):
         self.reconnect_timer.setInterval(2000)
         self.reconnect_timer.timeout.connect(self._retry_server_connection)
         self.jog_timer = QTimer(self)
-        # JOG lease refresh only. The server suppresses an identical JOG frame and
-        # extends its watchdog, so the physical motor command is not restarted.
-        # A 1 s refresh / 5 s lease also tolerates short Qt/network stalls.
-        self.jog_timer.setInterval(1000)
+        # Compatibility timer kept stopped. The hardware-owning server refreshes
+        # active Pelco-D manual motion every five seconds; clients send only
+        # start/change/STOP transitions.
+        self.jog_timer.setInterval(5000)
         self.jog_timer.timeout.connect(self._send_current_jog)
 
         self.gamepad_manager = GamepadManager(self)
@@ -475,7 +475,6 @@ class RemoteClientWindow(QMainWindow):
     def _start_jog(self, pan: str, tilt: str) -> None:
         self._current_jog = (pan, tilt)
         self._send_current_jog()
-        self.jog_timer.start()
 
     def _send_current_jog(self) -> None:
         if self._current_jog is None:
@@ -488,7 +487,6 @@ class RemoteClientWindow(QMainWindow):
                 "tilt": tilt,
                 "pan_level": int(self.pan_level.currentData()),
                 "tilt_level": int(self.tilt_level.currentData()),
-                "duration_ms": 5000,
             },
             quiet=True,
         )
@@ -563,13 +561,10 @@ class RemoteClientWindow(QMainWindow):
             self._gamepad_motion = next_motion
             self._current_jog = next_motion
 
-            # pygame polling is 40 ms, but sending a motor command on every poll
-            # floods the API/serial path. Send immediately only when direction
-            # changes; the timer below refreshes the server watchdog afterwards.
+            # pygame polling is 40 ms, but the server owns the 5 s Pelco-D
+            # runaway refresh. Send only when the requested direction changes.
             if changed:
                 self._send_current_jog()
-            if not self.jog_timer.isActive():
-                self.jog_timer.start()
 
         hat_index = gamepad_map.HAT_INDEX
         current_hat = (

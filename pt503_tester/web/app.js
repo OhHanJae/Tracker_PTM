@@ -40,11 +40,6 @@ let jog = null;
 let jogBusy = false;
 let jogStopBusy = false;
 
-// The PT unit receives the physical JOG frame only when direction/speed changes.
-// These values are only the server-side safety lease and its refresh interval.
-const JOG_WATCHDOG_MS = 5000;
-const JOG_KEEPALIVE_MS = 1000;
-
 
 // ============================================================================
 // Gamepad 상태
@@ -183,8 +178,7 @@ const fallbackTemplates = {
         pan: 'right',
         tilt: 'stop',
         pan_level: 5,
-        tilt_level: 5,
-        duration_ms: JOG_WATCHDOG_MS
+        tilt_level: 5
     },
 
     'motion.absolute': {
@@ -1008,7 +1002,7 @@ async function stopJog()
     }
 
 
-    // pointerup and lostpointercapture can fire back-to-back.  Do not enqueue
+    // Multiple release/cancel paths may arrive close together. Do not enqueue
     // duplicate STOP requests for the same release.
     jogStopBusy =
         true;
@@ -1081,8 +1075,7 @@ document
             const eventName
             of [
                 'pointerup',
-                'pointercancel',
-                'lostpointercapture'
+                'pointercancel'
             ]
         )
         {
@@ -1148,12 +1141,7 @@ async function sendJog()
                 tilt_level:
                     Number(
                         $('tiltLevel').value
-                    ),
-
-                // 5초 lease를 1초마다 갱신한다. 동일 JOG keepalive는 서버에서
-                // 실제 Pelco-D 모터 프레임을 재전송하지 않는다.
-                duration_ms:
-                    JOG_WATCHDOG_MS
+                    )
             },
 
             true
@@ -1177,45 +1165,9 @@ async function sendJog()
 }
 
 
-// JOG watchdog lease refresh. Browser rendering/gamepad work can briefly delay
-// timers, so keep a generous margin between refresh and server expiry.
-setInterval(
-    () => {
-
-        if (jog)
-        {
-            sendJog();
-        }
-
-    },
-    JOG_KEEPALIVE_MS
-);
-
-
-// ============================================================================
-// 브라우저 포커스 손실 시 STOP
-// ============================================================================
-
-window.addEventListener(
-    'blur',
-    guarded(stopJog)
-);
-
-
-document.addEventListener(
-    'visibilitychange',
-
-    () => {
-
-        if (
-            document.hidden
-        )
-        {
-            guarded(stopJog)();
-        }
-    }
-);
-
+// Manual JOG is intentionally not stopped merely because the browser loses
+// focus or becomes hidden.  The operator release/STOP state is authoritative.
+// pagehide below still sends a final safety STOP when the page is actually left.
 
 window.addEventListener(
     'pagehide',

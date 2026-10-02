@@ -87,11 +87,13 @@ DEFAULT_TCP_HOST = DEFAULT_HTTP_HOST
 DEFAULT_TCP_PORT = 8765
 MAX_TCP_LINE_BYTES = 65_536
 
-# Manual JOG uses a lease/watchdog rather than repeatedly restarting the motor.
-# The browser/client refreshes this lease well before expiry.  Five seconds is
-# long enough to survive short UI/network stalls while still providing a bounded
-# fail-safe if the controlling client disappears without sending STOP.
-JOG_DEFAULT_WATCHDOG_MS = 5000
+# Pelco-D manual motion is latched by direction bits.  Most units have an
+# internal runaway-protection timeout of roughly 15 s, so a still-active motion
+# command is refreshed about every 5 s.  There is intentionally no short
+# application watchdog: manual motion ends only on an explicit STOP/release,
+# another motion mode, serial disconnect, or communication failure.
+JOG_RESEND_INTERVAL_S = 5.0
+PELCO_MIN_COMMAND_GAP_S = 0.32
 
 PROTOCOL_NAME = 'PT503-Control'
 PROTOCOL_VERSION = '1.0'
@@ -167,11 +169,12 @@ class HeadlessController:
         self.laser_armed = False
         self.laser_on = False
         self.aux_number = 1
-        self._jog_deadline = 0.0
+        self._jog_next_resend = 0.0
         # Active continuous JOG key: (pan, tilt, pan_level, tilt_level).
-        # Identical client keepalives extend the watchdog without re-sending the
-        # same Pelco-D motion frame to the PT unit.
+        # The PT unit receives the frame at start/change and then about every
+        # five seconds only to satisfy Pelco-D runaway protection.
         self._active_jog: tuple[Any, Any, int, int] | None = None
+        self._last_serial_tx_at = 0.0
         self._laser_deadline = 0.0
         self._health_misses = 0
         self._tracker = None
@@ -366,28 +369,41 @@ class HeadlessController:
                     continue
                 try:
                     now = time.monotonic()
-                    if self._jog_deadline and now >= self._jog_deadline:
-                        self._jog_deadline = 0.0
-                        self._active_jog = None
-                        self.send(stop(self._address), wait_ms=0)
-                        self.motion_state = "jog_timeout"
+                    jogging = self._active_jog is not None
+
+                    # Pelco-D runaway protection: while the operator is still
+                    # holding manual motion, repeat the same motion command only
+                    # about every five seconds.  Do NOT send STOP on a short
+                    # software timeout; release/STOP is authoritative.
+                    if jogging and now >= self._jog_next_resend:
+                        pan, tilt, pan_level, tilt_level = self._active_jog
+                        self.send(
+                            manual_motion(
+                                self._address,
+                                pan,
+                                tilt,
+                                manual_speed_value(pan_level),
+                                manual_speed_value(tilt_level),
+                            ),
+                            wait_ms=80,
+                        )
+                        self._jog_next_resend = time.monotonic() + JOG_RESEND_INTERVAL_S
+
                     if self._tracker and self._tracker.check_timeout().status == "timeout":
                         self._tracker = None
                         self.motion_state = "timeout"
-                        self.send(stop(self._address), wait_ms=0)
+                        self.send(stop(self._address), wait_ms=80)
                         self._finish_pending_motion(
                             error=("MOTION_TIMEOUT", "target position was not reached in time")
                         )
-                    # During continuous manual JOG, keep the RS-485 bus quiet.
-                    # Some PT units visibly hesitate when position/health queries are
-                    # interleaved with a continuous motion command. The client JOG
-                    # keepalive still protects runaway motion via _jog_deadline.
-                    jogging = self._active_jog is not None and self._jog_deadline > now
+
+                    # Never interleave position/health queries with continuous
+                    # manual motion.  Extra commands can make PT heads hesitate.
                     if not jogging:
                         if now >= next_poll and (self.monitor_config["enabled"] or self._tracker):
                             self.send(query_pan(self._address), wait_ms=80)
                             self.send(query_tilt(self._address), wait_ms=80)
-                            next_poll = now + self.monitor_config["interval_ms"] / 1000
+                            next_poll = time.monotonic() + self.monitor_config["interval_ms"] / 1000
                         if now >= next_health:
                             health_rx = self.send(query_pan(self._address), wait_ms=80)
                             if health_rx:
@@ -398,7 +414,7 @@ class HeadlessController:
                                     self.motion_state = "communication_timeout"
                                     self.close()
                                     continue
-                            next_health = now + float(
+                            next_health = time.monotonic() + float(
                                 self.auto_reconnect_config["health_interval_s"]
                             )
                 except (HeadlessApiError, OSError):
@@ -658,7 +674,7 @@ class HeadlessController:
     def close(self) -> None:
         """Close PT-503 serial only. Laser uses its own serial port."""
         with self._lock:
-            self._jog_deadline = 0.0
+            self._jog_next_resend = 0.0
             self._active_jog = None
             self._tracker = None
             if self.connected:
@@ -674,6 +690,7 @@ class HeadlessController:
                     pass
             self._serial = None
             self._health_misses = 0
+            self._last_serial_tx_at = 0.0
             self.current_pan = self.current_tilt = None
 
     def status(self) -> dict[str, Any]:
@@ -754,6 +771,7 @@ class HeadlessController:
             self._baudrate = int(baudrate)
             self._address = int(address)
             self._health_misses = 0
+            self._last_serial_tx_at = 0.0
             if enable_auto_reconnect:
                 self.auto_reconnect_config["enabled"] = True
                 self.auto_reconnect_config["baudrates"] = [int(baudrate)]
@@ -919,8 +937,17 @@ class HeadlessController:
             if not self.connected or self._serial is None:
                 raise HeadlessApiError("SERIAL_NOT_CONNECTED", "serial port is not connected")
             try:
+                # Pelco-D receivers can become confused when commands are packed
+                # too closely.  Keep a conservative >=300 ms command-to-command
+                # gap on the live PT serial bus.
+                elapsed = time.monotonic() - self._last_serial_tx_at
+                remaining = PELCO_MIN_COMMAND_GAP_S - elapsed
+                if self._last_serial_tx_at and remaining > 0:
+                    time.sleep(remaining)
+
                 self._serial.write(command.data)
                 self._serial.flush()
+                self._last_serial_tx_at = time.monotonic()
                 self.last_tx = {
                     "hex": frame_to_hex(command.data),
                     "description": command.description,
@@ -1155,32 +1182,23 @@ class HeadlessController:
                 tilt = {"up": TiltDirection.UP, "down": TiltDirection.DOWN, "stop": TiltDirection.STOP}[self._enum(params, "tilt", {"up", "down", "stop"}, "stop")]
                 pl = self._int(params, "pan_level", 5, minimum=1, maximum=8)
                 tl = self._int(params, "tilt_level", 5, minimum=1, maximum=8)
-                duration = self._int(
-                    params,
-                    "duration_ms",
-                    JOG_DEFAULT_WATCHDOG_MS,
-                    minimum=500,
-                    maximum=10_000,
-                )
 
-                # Keep the active-JOG state and watchdog update atomic with the
-                # service thread.  Without this lock the watchdog thread can send
-                # STOP exactly while a keepalive request is extending the lease,
-                # which is observed as a periodic jerk/hesitation.
                 with self._lock:
-                    now = time.monotonic()
-                    jog_key = (
-                        pan,
-                        tilt,
-                        pl if pan is not PanDirection.STOP else 0,
-                        tl if tilt is not TiltDirection.STOP else 0,
-                    )
-                    refreshed = self._active_jog == jog_key and self._jog_deadline > now
+                    if pan is PanDirection.STOP and tilt is TiltDirection.STOP:
+                        self._active_jog = None
+                        self._jog_next_resend = 0.0
+                        self._tracker = None
+                        self.motion_state = "stopped"
+                        rx = self.send(stop(self._address), wait_ms=80)
+                        return {"accepted": True, "stopped": True, "rx": rx}
 
-                    if refreshed:
-                        # Same direction/speed: watchdog refresh only.  Pelco-D
-                        # continuous movement does not need the same motor frame
-                        # to be re-issued on every client keepalive.
+                    jog_key = (pan, tilt, pl, tl)
+                    unchanged = self._active_jog == jog_key
+                    if unchanged:
+                        # Old clients may still send periodic motion.jog requests.
+                        # Ignore duplicates WITHOUT moving the server's own next
+                        # 5 s physical refresh time; otherwise a 1 s client
+                        # keepalive could postpone the Pelco refresh forever.
                         rx: list[dict[str, Any]] = []
                     else:
                         rx = self.send(
@@ -1191,24 +1209,25 @@ class HeadlessController:
                                 manual_speed_value(pl),
                                 manual_speed_value(tl),
                             ),
-                            wait_ms=0,
+                            wait_ms=80,
                         )
                         self._active_jog = jog_key
+                        self._jog_next_resend = time.monotonic() + JOG_RESEND_INTERVAL_S
 
                     self._tracker = None
-                    self._jog_deadline = now + duration / 1000
                     self.motion_state = "jog"
 
                 return {
                     "accepted": True,
-                    "refreshed": refreshed,
+                    "continuous": True,
+                    "unchanged": unchanged,
                     "rx": rx,
                     "pan_level": pl,
                     "tilt_level": tl,
-                    "watchdog_ms": duration,
+                    "resend_interval_ms": int(JOG_RESEND_INTERVAL_S * 1000),
                 }
             if command in {"motion.stop", "cruise.stop", "scan.stop"}:
-                self._jog_deadline = 0.0
+                self._jog_next_resend = 0.0
                 self._active_jog = None
                 self._tracker = None
                 self.motion_state = "stopped"
@@ -1216,8 +1235,8 @@ class HeadlessController:
                     error=("MOTION_STOPPED", "movement was stopped by request")
                 )
             if command == "motion.absolute":
-                # Absolute motion supersedes any continuous manual JOG watchdog.
-                self._jog_deadline = 0.0
+                # Absolute motion supersedes continuous manual JOG.
+                self._jog_next_resend = 0.0
                 self._active_jog = None
                 # Legacy speed fields are ignored; every target move uses maximum.
                 params = {**params, "pan_speed": AUTO_PAN_SPEED, "tilt_speed": AUTO_TILT_SPEED, "axis_delay_ms": 0}
@@ -1227,7 +1246,7 @@ class HeadlessController:
                 setter = set_position_speed if command.startswith("preset") else set_scan_speed
                 return {"accepted": True, "fixed_maximum": True, "rx": self.send(setter(self._address, AUTO_PAN_SPEED, AUTO_TILT_SPEED))}
             if command in {"motion.relative", "preset.call", "preset.goto", "pelco.flip", "pelco.zero_pan", "pattern.run", "preset.scan", "scan.start", "cruise.start", "camera.scan", "home.auto", "home.after"}:
-                self._jog_deadline = 0.0
+                self._jog_next_resend = 0.0
                 self._active_jog = None
                 self._tracker = None
                 for setter in (set_position_speed, set_scan_speed, set_cruise_speed):
@@ -1257,7 +1276,7 @@ class HeadlessController:
                 params = {**params, "pan_speed": AUTO_PAN_SPEED, "tilt_speed": AUTO_TILT_SPEED, "enabled": self._bool(params, "enabled", True)}
             result = self._command_impl(command, params)
             if command == "motion.absolute":
-                self._jog_deadline = 0.0
+                self._jog_next_resend = 0.0
                 self._tracker = MotionTracker(
                     "API move",
                     target_pan=float(params["pan"]) if params.get("pan") is not None else None,
@@ -1680,10 +1699,10 @@ pre{white-space:pre-wrap;background:#0c1119;border:1px solid #303b4d;border-radi
 <label>Port</label><select id="port"></select><div class="row"><div><label>Baud</label><input id="baud" value="9600"></div><div><label>Address</label><input id="addr" value="1"></div></div>
 <div class="row"><button onclick="connectSerial()">Connect</button><button class="secondary" onclick="cmd('serial.disconnect',{})">Disconnect</button></div>
 <h2>Move</h2><div class="dpad" aria-label="manual move dial">
-<button class="seg up" title="Tilt Up" onpointerdown="jog('stop','up')" onpointerup="stop()" onpointercancel="stop()" onpointerleave="stop()">▲</button>
-<button class="seg left" title="Pan Left" onpointerdown="jog('left','stop')" onpointerup="stop()" onpointercancel="stop()" onpointerleave="stop()">◀</button>
-<button class="seg right" title="Pan Right" onpointerdown="jog('right','stop')" onpointerup="stop()" onpointercancel="stop()" onpointerleave="stop()">▶</button>
-<button class="seg down" title="Tilt Down" onpointerdown="jog('stop','down')" onpointerup="stop()" onpointercancel="stop()" onpointerleave="stop()">▼</button>
+<button class="seg up" title="Tilt Up" onpointerdown="jog('stop','up')" onpointerup="stop()" onpointercancel="stop()">▲</button>
+<button class="seg left" title="Pan Left" onpointerdown="jog('left','stop')" onpointerup="stop()" onpointercancel="stop()">◀</button>
+<button class="seg right" title="Pan Right" onpointerdown="jog('right','stop')" onpointerup="stop()" onpointercancel="stop()">▶</button>
+<button class="seg down" title="Tilt Down" onpointerdown="jog('stop','down')" onpointerup="stop()" onpointercancel="stop()">▼</button>
 <button class="center" title="STOP" onclick="stop()">STOP</button></div>
 <div class="row"><div><label>Pan</label><input id="pan" value="0"></div><div><label>Tilt</label><input id="tilt" value="0"></div></div>
 <button onclick="gotoAbs()">지령위치 이동</button><button class="secondary" onclick="cmd('position.get',{})">위치 조회</button></section>
@@ -1696,7 +1715,7 @@ pre{white-space:pre-wrap;background:#0c1119;border:1px solid #303b4d;border-radi
 <script>
 let recipes=[];let commands=[];const templates={
 'serial.auto_reconnect':{enabled:true,baudrates:[9600],first_address:1,last_address:16,timeout_ms:200,retry_interval_s:3,health_interval_s:2},
-'motion.jog':{pan:'right',tilt:'stop',pan_level:5,tilt_level:5,duration_ms:5000},'motion.absolute':{pan:90,tilt:0},
+'motion.jog':{pan:'right',tilt:'stop',pan_level:5,tilt_level:5},'motion.absolute':{pan:90,tilt:0},
 'lens.motion':{action:'zoom_in'},'aux.set':{number:1,enabled:true},'preset.set':{number:1,confirm:true},'preset.call':{number:1},'preset.clear':{number:1,confirm:true},
 'scan.set_point':{point:'start'},'scan.start':{mode:'vendor'},'scan.stop':{mode:'vendor'},'scan.speed':{pan_speed:20,tilt_speed:8},'scan.speed_adjust':{direction:'faster'},
 'cruise.start':{track:1},'cruise.speed':{pan_speed:20,tilt_speed:8},'home.auto':{enabled:false},'home.after':{action:'cruise1'},
@@ -1712,7 +1731,7 @@ async function loadCommands(){const r=await cmdSilent('system.commands',{});comm
 async function loadRecipes(){const r=await cmdSilent('recipe.list',{});recipes=r.recipes;const cur=recipe.value;recipe.innerHTML=recipes.map(x=>`<option value="${x.id}">${x.name}</option>`).join('');if(cur)recipe.value=cur;renderPoints()}
 function selectedRecipe(){return recipes.find(r=>r.id===recipe.value)||recipes[0]}function renderPoints(){const r=selectedRecipe();points.innerHTML=(r?.points||[]).map(p=>`<tr><td>${p.order}</td><td>${p.name}</td><td>${p.pan}</td><td>${p.tilt}</td><td><button onclick="gotoPoint('${p.id}')">이동</button></td></tr>`).join('')}
 async function scan(){await cmd('serial.scan',{baudrates:[9600],first_address:1,last_address:1,timeout_ms:200})}async function connectSerial(){await cmd('serial.connect',{port:port.value,baudrate:+baud.value,address:+addr.value})}
-async function jog(p,t){await cmd('motion.jog',{pan:p,tilt:t,pan_level:5,tilt_level:5,duration_ms:5000})}async function stop(){await cmd('motion.stop',{})}async function gotoAbs(){await cmd('motion.absolute',{pan:+pan.value,tilt:+tilt.value})}
+async function jog(p,t){await cmd('motion.jog',{pan:p,tilt:t,pan_level:5,tilt_level:5})}async function stop(){await cmd('motion.stop',{})}async function gotoAbs(){await cmd('motion.absolute',{pan:+pan.value,tilt:+tilt.value})}
 async function newRecipe(){const name=prompt('Recipe name','Recipe');if(name)await cmd('recipe.upsert',{name})}async function savePoint(){const r=selectedRecipe();if(!r)return;await cmd('point.upsert',{recipe_id:r.id,name:pname.value||'Point',pan:+ppan.value,tilt:+ptilt.value})}
 function loadTemplate(){apiParams.value=JSON.stringify(templates[apiCommand.value]||{},null,2)}
 async function runApiCommand(){let params={};try{params=JSON.parse(apiParams.value||'{}')}catch(e){log('ERR JSON params -> '+e.message);return}await cmd(apiCommand.value,params)}
