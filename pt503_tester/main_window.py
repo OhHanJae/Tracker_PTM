@@ -479,6 +479,9 @@ class MainWindow(QMainWindow):
         self.gamepad_previous_hat = (0, 0)
         self.gamepad_stop_latched = False
         self.api_motion_owner: str | None = None
+        # Last physical API JOG command. Identical keepalives refresh only the
+        # watchdog and must not re-send/restart the PT motor command.
+        self.api_jog_key: tuple[PanDirection, TiltDirection, int, int] | None = None
         self.api_laser_owner: str | None = None
         self.api_motion_context: dict[str, Any] | None = None
         self.api_scan_context: dict[str, Any] | None = None
@@ -496,7 +499,10 @@ class MainWindow(QMainWindow):
         self.laser_timer.setSingleShot(True)
         self.laser_timer.timeout.connect(self._laser_off)
         self.jog_keepalive = QTimer(self)
-        self.jog_keepalive.setInterval(4000)
+        # Legacy repeat timer is intentionally not started for manual JOG.
+        # BIT/Pelco-D manual motion is continuous until STOP; re-sending the same
+        # frame can create a visible hesitation on the PT503/PT510.
+        self.jog_keepalive.setInterval(60_000)
         self.jog_keepalive.timeout.connect(self._repeat_jog)
         self.api_jog_watchdog = QTimer(self)
         self.api_jog_watchdog.setSingleShot(True)
@@ -1509,7 +1515,7 @@ class MainWindow(QMainWindow):
             '응답  {"id":"m1","ok":true,"result":{"accepted":true}}\n'
             '이벤트 {"event":"motion.completed","data":{"request_id":"m1",...}}\n\n'
             'Jog   {"id":"j1","command":"motion.jog",'
-            '"params":{"pan":"right","tilt":"stop","pan_level":3,"duration_ms":500}}\n'
+            '"params":{"pan":"right","tilt":"stop","pan_level":3,"duration_ms":5000}}\n'
             'STOP  {"id":"s1","command":"motion.stop","params":{}}\n'
             '상태  {"id":"q1","command":"system.status","params":{}}'
         )
@@ -2810,18 +2816,41 @@ class MainWindow(QMainWindow):
         )
         pan_speed = manual_speed_value(pan_level)
         tilt_speed = manual_speed_value(tilt_level)
-        duration = self._api_int(params, "duration_ms", 500, minimum=100, maximum=5000)
+        duration = self._api_int(
+            params, "duration_ms", 5000, minimum=500, maximum=10_000
+        )
         if pan is PanDirection.STOP and tilt is TiltDirection.STOP:
             self._emergency_stop()
             self.api_motion_owner = None
+            self.api_jog_key = None
             self.api_jog_watchdog.stop()
             return {"accepted": True, "stopped": True}
-        self._cancel_motion_tracking("API Jog가 시작됨")
-        self._api_send(manual_motion(self._address(), pan, tilt, pan_speed, tilt_speed))
+
+        jog_key = (
+            pan,
+            tilt,
+            pan_speed if pan is not PanDirection.STOP else 0,
+            tilt_speed if tilt is not TiltDirection.STOP else 0,
+        )
+        refreshed = (
+            self.api_motion_owner == client_id
+            and self.api_jog_key == jog_key
+            and self.api_jog_watchdog.isActive()
+        )
+
+        if not refreshed:
+            self._cancel_motion_tracking("API Jog가 시작됨")
+            self._api_send(
+                manual_motion(self._address(), pan, tilt, pan_speed, tilt_speed)
+            )
+            self.api_jog_key = jog_key
+
         self.api_motion_owner = client_id
+        # Identical API keepalive: restart only the software watchdog.
         self.api_jog_watchdog.start(duration)
         return {
             "accepted": True,
+            "refreshed": refreshed,
             "pan": pan_text,
             "tilt": tilt_text,
             "pan_level": pan_level,
@@ -2834,6 +2863,7 @@ class MainWindow(QMainWindow):
     def _api_jog_timeout(self) -> None:
         owner = self.api_motion_owner
         self.api_motion_owner = None
+        self.api_jog_key = None
         if self.is_connected:
             self._emergency_stop()
         self.api_server.broadcast(
@@ -2850,6 +2880,7 @@ class MainWindow(QMainWindow):
             raise ApiCommandError("BUSY", "이동 완료 판정이 이미 진행 중입니다.")
         self.api_jog_watchdog.stop()
         self.api_motion_owner = None
+        self.api_jog_key = None
         pan = self._api_optional_float(params, "pan", minimum=0.0, maximum=359.99)
         tilt = self._api_optional_float(params, "tilt", minimum=-60.0, maximum=60.0)
         if pan is None and tilt is None:
@@ -3499,15 +3530,30 @@ class MainWindow(QMainWindow):
             }.get(tilt, tilt)
         motion = pan, tilt, pan_speed, tilt_speed
         now = time.perf_counter()
-        changed = motion != self.gamepad_motion
-        keepalive_due = (
-            now - self.gamepad_last_send >= gamepad_map.RUNAWAY_RESEND_SECONDS
+
+        previous = self.gamepad_motion
+        direction_changed = (
+            previous is None
+            or previous[0] is not pan
+            or previous[1] is not tilt
         )
-        if changed or keepalive_due:
+        speed_changed = (
+            previous is None
+            or abs(previous[2] - pan_speed) >= 4
+            or abs(previous[3] - tilt_speed) >= 4
+        )
+        # Raw analog axes fluctuate slightly even while the user's hand is still.
+        # Do not turn that noise into a 25 Hz stream of Pelco-D motor commands.
+        speed_update_due = speed_changed and (now - self.gamepad_last_send >= 0.20)
+        should_send = direction_changed or speed_update_due
+
+        if should_send:
             self.api_jog_watchdog.stop()
             self.api_motion_owner = None
+            self.api_jog_key = None
             self._cancel_motion_tracking("게임패드 Jog가 시작됨")
-        if (changed or keepalive_due) and self._send(
+
+        if should_send and self._send(
             manual_motion(self._address(), pan, tilt, pan_speed, tilt_speed)
         ):
             self.gamepad_motion = motion
@@ -3595,6 +3641,7 @@ class MainWindow(QMainWindow):
         self.is_connected = False
         self.api_jog_watchdog.stop()
         self.api_motion_owner = None
+        self.api_jog_key = None
         self._stop_gamepad_motion(send_stop=False)
         if hasattr(self, "gamepad_enable"):
             self.gamepad_enable.setChecked(False)
@@ -3673,9 +3720,8 @@ class MainWindow(QMainWindow):
                 TiltDirection.DOWN: TiltDirection.UP,
             }.get(tilt, tilt)
         self.current_jog = (pan, tilt)
+        # One continuous Pelco-D JOG frame; STOP is sent on release.
         self._repeat_jog()
-        if self.is_connected:
-            self.jog_keepalive.start()
 
     def _repeat_jog(self) -> None:
         if not self.current_jog:
@@ -3702,6 +3748,7 @@ class MainWindow(QMainWindow):
         self.gamepad_last_send = 0.0
         self.api_jog_watchdog.stop()
         self.api_motion_owner = None
+        self.api_jog_key = None
         self.jog_keepalive.stop()
         self._cancel_motion_tracking("STOP 명령")
         self._refresh_monitor_timer()
@@ -3805,6 +3852,16 @@ class MainWindow(QMainWindow):
     def _monitor_tick(self) -> None:
         if not self.is_connected or self.is_scanning:
             return
+
+        # Keep the RS-485 bus quiet during manual continuous motion.  PT503/PT510
+        # can visibly hesitate when position queries are interleaved with JOG.
+        if (
+            self.current_jog is not None
+            or self.gamepad_motion is not None
+            or self.api_motion_owner is not None
+        ):
+            return
+
         if self.motion_tracker is not None:
             self._handle_tracker_result(self.motion_tracker.check_timeout())
             if self.motion_tracker is None and not self.monitor_check.isChecked():

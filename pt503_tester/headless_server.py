@@ -86,6 +86,13 @@ DEFAULT_HTTP_PORT = 8080
 DEFAULT_TCP_HOST = DEFAULT_HTTP_HOST
 DEFAULT_TCP_PORT = 8765
 MAX_TCP_LINE_BYTES = 65_536
+
+# Manual JOG uses a lease/watchdog rather than repeatedly restarting the motor.
+# The browser/client refreshes this lease well before expiry.  Five seconds is
+# long enough to survive short UI/network stalls while still providing a bounded
+# fail-safe if the controlling client disappears without sending STOP.
+JOG_DEFAULT_WATCHDOG_MS = 5000
+
 PROTOCOL_NAME = 'PT503-Control'
 PROTOCOL_VERSION = '1.0'
 SUPPORTED_COMMANDS = supported_command_names()
@@ -1148,32 +1155,50 @@ class HeadlessController:
                 tilt = {"up": TiltDirection.UP, "down": TiltDirection.DOWN, "stop": TiltDirection.STOP}[self._enum(params, "tilt", {"up", "down", "stop"}, "stop")]
                 pl = self._int(params, "pan_level", 5, minimum=1, maximum=8)
                 tl = self._int(params, "tilt_level", 5, minimum=1, maximum=8)
-                duration = self._int(params, "duration_ms", 1200, minimum=100, maximum=5000)
+                duration = self._int(
+                    params,
+                    "duration_ms",
+                    JOG_DEFAULT_WATCHDOG_MS,
+                    minimum=500,
+                    maximum=10_000,
+                )
 
-                now = time.monotonic()
-                jog_key = (pan, tilt, pl, tl)
-                refreshed = self._active_jog == jog_key and self._jog_deadline > now
-
-                if refreshed:
-                    # Same direction/speed: this is only a client watchdog keepalive.
-                    # Do not send the same continuous-motion frame to the motor again.
-                    rx: list[dict[str, Any]] = []
-                else:
-                    rx = self.send(
-                        manual_motion(
-                            self._address,
-                            pan,
-                            tilt,
-                            manual_speed_value(pl),
-                            manual_speed_value(tl),
-                        ),
-                        wait_ms=0,
+                # Keep the active-JOG state and watchdog update atomic with the
+                # service thread.  Without this lock the watchdog thread can send
+                # STOP exactly while a keepalive request is extending the lease,
+                # which is observed as a periodic jerk/hesitation.
+                with self._lock:
+                    now = time.monotonic()
+                    jog_key = (
+                        pan,
+                        tilt,
+                        pl if pan is not PanDirection.STOP else 0,
+                        tl if tilt is not TiltDirection.STOP else 0,
                     )
-                    self._active_jog = jog_key
+                    refreshed = self._active_jog == jog_key and self._jog_deadline > now
 
-                self._tracker = None
-                self._jog_deadline = now + duration / 1000
-                self.motion_state = "jog"
+                    if refreshed:
+                        # Same direction/speed: watchdog refresh only.  Pelco-D
+                        # continuous movement does not need the same motor frame
+                        # to be re-issued on every client keepalive.
+                        rx: list[dict[str, Any]] = []
+                    else:
+                        rx = self.send(
+                            manual_motion(
+                                self._address,
+                                pan,
+                                tilt,
+                                manual_speed_value(pl),
+                                manual_speed_value(tl),
+                            ),
+                            wait_ms=0,
+                        )
+                        self._active_jog = jog_key
+
+                    self._tracker = None
+                    self._jog_deadline = now + duration / 1000
+                    self.motion_state = "jog"
+
                 return {
                     "accepted": True,
                     "refreshed": refreshed,
@@ -1362,7 +1387,7 @@ class HeadlessController:
             return {"accepted": True, "scanning": False}
 
         if command == "motion.stop":
-            return {"rx": self.send(stop(self._address), wait_ms=80)}
+            return {"rx": self.send(stop(self._address), wait_ms=0)}
         if command == "motion.jog":
             pan = {"left": PanDirection.LEFT, "right": PanDirection.RIGHT, "stop": PanDirection.STOP}[
                 self._enum(params, "pan", {"left", "right", "stop"}, "stop")
@@ -1671,7 +1696,7 @@ pre{white-space:pre-wrap;background:#0c1119;border:1px solid #303b4d;border-radi
 <script>
 let recipes=[];let commands=[];const templates={
 'serial.auto_reconnect':{enabled:true,baudrates:[9600],first_address:1,last_address:16,timeout_ms:200,retry_interval_s:3,health_interval_s:2},
-'motion.jog':{pan:'right',tilt:'stop',pan_level:5,tilt_level:5,duration_ms:500},'motion.absolute':{pan:90,tilt:0},
+'motion.jog':{pan:'right',tilt:'stop',pan_level:5,tilt_level:5,duration_ms:5000},'motion.absolute':{pan:90,tilt:0},
 'lens.motion':{action:'zoom_in'},'aux.set':{number:1,enabled:true},'preset.set':{number:1,confirm:true},'preset.call':{number:1},'preset.clear':{number:1,confirm:true},
 'scan.set_point':{point:'start'},'scan.start':{mode:'vendor'},'scan.stop':{mode:'vendor'},'scan.speed':{pan_speed:20,tilt_speed:8},'scan.speed_adjust':{direction:'faster'},
 'cruise.start':{track:1},'cruise.speed':{pan_speed:20,tilt_speed:8},'home.auto':{enabled:false},'home.after':{action:'cruise1'},
@@ -1687,7 +1712,7 @@ async function loadCommands(){const r=await cmdSilent('system.commands',{});comm
 async function loadRecipes(){const r=await cmdSilent('recipe.list',{});recipes=r.recipes;const cur=recipe.value;recipe.innerHTML=recipes.map(x=>`<option value="${x.id}">${x.name}</option>`).join('');if(cur)recipe.value=cur;renderPoints()}
 function selectedRecipe(){return recipes.find(r=>r.id===recipe.value)||recipes[0]}function renderPoints(){const r=selectedRecipe();points.innerHTML=(r?.points||[]).map(p=>`<tr><td>${p.order}</td><td>${p.name}</td><td>${p.pan}</td><td>${p.tilt}</td><td><button onclick="gotoPoint('${p.id}')">이동</button></td></tr>`).join('')}
 async function scan(){await cmd('serial.scan',{baudrates:[9600],first_address:1,last_address:1,timeout_ms:200})}async function connectSerial(){await cmd('serial.connect',{port:port.value,baudrate:+baud.value,address:+addr.value})}
-async function jog(p,t){await cmd('motion.jog',{pan:p,tilt:t,pan_level:5,tilt_level:5,duration_ms:500})}async function stop(){await cmd('motion.stop',{})}async function gotoAbs(){await cmd('motion.absolute',{pan:+pan.value,tilt:+tilt.value})}
+async function jog(p,t){await cmd('motion.jog',{pan:p,tilt:t,pan_level:5,tilt_level:5,duration_ms:5000})}async function stop(){await cmd('motion.stop',{})}async function gotoAbs(){await cmd('motion.absolute',{pan:+pan.value,tilt:+tilt.value})}
 async function newRecipe(){const name=prompt('Recipe name','Recipe');if(name)await cmd('recipe.upsert',{name})}async function savePoint(){const r=selectedRecipe();if(!r)return;await cmd('point.upsert',{recipe_id:r.id,name:pname.value||'Point',pan:+ppan.value,tilt:+ptilt.value})}
 function loadTemplate(){apiParams.value=JSON.stringify(templates[apiCommand.value]||{},null,2)}
 async function runApiCommand(){let params={};try{params=JSON.parse(apiParams.value||'{}')}catch(e){log('ERR JSON params -> '+e.message);return}await cmd(apiCommand.value,params)}

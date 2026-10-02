@@ -67,9 +67,10 @@ class RemoteClientWindow(QMainWindow):
         self.reconnect_timer.setInterval(2000)
         self.reconnect_timer.timeout.connect(self._retry_server_connection)
         self.jog_timer = QTimer(self)
-        # JOG keepalive only. Repeating the motor command too frequently can make
-        # some PT units re-process/restart the same continuous-motion command.
-        self.jog_timer.setInterval(350)
+        # JOG lease refresh only. The server suppresses an identical JOG frame and
+        # extends its watchdog, so the physical motor command is not restarted.
+        # A 1 s refresh / 5 s lease also tolerates short Qt/network stalls.
+        self.jog_timer.setInterval(1000)
         self.jog_timer.timeout.connect(self._send_current_jog)
 
         self.gamepad_manager = GamepadManager(self)
@@ -487,7 +488,7 @@ class RemoteClientWindow(QMainWindow):
                 "tilt": tilt,
                 "pan_level": int(self.pan_level.currentData()),
                 "tilt_level": int(self.tilt_level.currentData()),
-                "duration_ms": 1200,
+                "duration_ms": 5000,
             },
             quiet=True,
         )

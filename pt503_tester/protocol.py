@@ -148,10 +148,13 @@ def manual_motion(
     pan_speed: int = 0x20,
     tilt_speed: int = 0x20,
 ) -> OutgoingCommand:
-    """Build a manual motion command.
+    """Build a BIT-PT503/PT510 manual Pelco-D motion command.
 
-    Direction bits determine whether an axis moves.  A speed byte is still
-    included when an axis is stopped, but the receiver ignores that value.
+    BIT's command sheet defines the speed byte of a stopped axis as ``0x00``
+    (for example: Pan Right = ``FF ADD 00 02 PAN_SPEED 00 SUM``).  Some generic
+    Pelco-D implementations ignore the unused speed byte, but relying on that
+    behavior can make vendor firmware re-evaluate the stopped axis and produce
+    uneven manual motion.  Always zero the speed byte for an inactive axis.
     """
 
     if not MIN_SPEED <= pan_speed <= MAX_SPEED:
@@ -159,16 +162,27 @@ def manual_motion(
     if not MIN_SPEED <= tilt_speed <= MAX_SPEED:
         raise ProtocolError("Tilt 속도는 0x00~0x3F 범위여야 합니다.")
 
+    if pan is PanDirection.STOP and tilt is TiltDirection.STOP:
+        return stop(address)
+
+    effective_pan_speed = pan_speed if pan is not PanDirection.STOP else 0
+    effective_tilt_speed = tilt_speed if tilt is not TiltDirection.STOP else 0
+
     command2 = pan.value | tilt.value
     names = []
     if pan is not PanDirection.STOP:
-        names.append(f"Pan {pan.name} 속도 {pan_speed}")
+        names.append(f"Pan {pan.name} 속도 {effective_pan_speed}")
     if tilt is not TiltDirection.STOP:
-        names.append(f"Tilt {tilt.name} 속도 {tilt_speed}")
-    if not names:
-        return stop(address)
+        names.append(f"Tilt {tilt.name} 속도 {effective_tilt_speed}")
+
     return _command(
-        address, 0, command2, pan_speed, tilt_speed, ", ".join(names), "motion"
+        address,
+        0,
+        command2,
+        effective_pan_speed,
+        effective_tilt_speed,
+        ", ".join(names),
+        "motion",
     )
 
 

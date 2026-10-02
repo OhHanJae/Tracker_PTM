@@ -38,6 +38,12 @@ const protocolCommandGuide = window.protocolCommandGuide || {};
 
 let jog = null;
 let jogBusy = false;
+let jogStopBusy = false;
+
+// The PT unit receives the physical JOG frame only when direction/speed changes.
+// These values are only the server-side safety lease and its refresh interval.
+const JOG_WATCHDOG_MS = 5000;
+const JOG_KEEPALIVE_MS = 1000;
 
 
 // ============================================================================
@@ -178,7 +184,7 @@ const fallbackTemplates = {
         tilt: 'stop',
         pan_level: 5,
         tilt_level: 5,
-        duration_ms: 500
+        duration_ms: JOG_WATCHDOG_MS
     },
 
     'motion.absolute': {
@@ -979,6 +985,8 @@ async function stopJog()
         true;
 
 
+    // A JOG POST may already be in flight.  Let it finish first so an older
+    // motion request cannot arrive at the server after STOP.
     while (jogBusy)
     {
         await new Promise(
@@ -992,14 +1000,31 @@ async function stopJog()
 
 
     if (
-        status.serial?.connected
+        !status.serial?.connected ||
+        jogStopBusy
     )
+    {
+        return;
+    }
+
+
+    // pointerup and lostpointercapture can fire back-to-back.  Do not enqueue
+    // duplicate STOP requests for the same release.
+    jogStopBusy =
+        true;
+
+    try
     {
         await cmd(
             'motion.stop',
             {},
             true
         );
+    }
+    finally
+    {
+        jogStopBusy =
+            false;
     }
 }
 
@@ -1084,6 +1109,25 @@ async function sendJog()
     }
 
 
+    // Serialize a new JOG behind an earlier STOP request. This prevents a rapid
+    // release/re-press from being reordered by concurrent HTTP requests.
+    while (jogStopBusy)
+    {
+        await new Promise(
+            resolve =>
+                setTimeout(
+                    resolve,
+                    10
+                )
+        );
+
+        if (!jog)
+        {
+            return;
+        }
+    }
+
+
     jogBusy =
         true;
 
@@ -1106,10 +1150,10 @@ async function sendJog()
                         $('tiltLevel').value
                     ),
 
-                // 서버 watchdog 여유를 충분히 주고, 동일 JOG는 서버에서
-                // watchdog만 갱신하여 모터 명령 자체는 반복 송신하지 않는다.
+                // 5초 lease를 1초마다 갱신한다. 동일 JOG keepalive는 서버에서
+                // 실제 Pelco-D 모터 프레임을 재전송하지 않는다.
                 duration_ms:
-                    1200
+                    JOG_WATCHDOG_MS
             },
 
             true
@@ -1133,9 +1177,8 @@ async function sendJog()
 }
 
 
-// Jog watchdog 갱신. 너무 짧은 주기로 HTTP/RS-485를 두드리지 않도록
-// 350 ms 간격으로만 keepalive를 보낸다. 동일 JOG는 서버에서 실제 모터
-// 프레임을 재전송하지 않고 watchdog deadline만 연장한다.
+// JOG watchdog lease refresh. Browser rendering/gamepad work can briefly delay
+// timers, so keep a generous margin between refresh and server expiry.
 setInterval(
     () => {
 
@@ -1145,7 +1188,7 @@ setInterval(
         }
 
     },
-    350
+    JOG_KEEPALIVE_MS
 );
 
 
