@@ -89,10 +89,11 @@ MAX_TCP_LINE_BYTES = 65_536
 
 # Pelco-D manual motion is latched by direction bits. Generic Pelco guidance
 # describes a longer runaway timeout, but PT503 field behavior can stop sooner.
-# Refresh an active manual motion once per second. There is intentionally no
-# short application watchdog: manual motion ends only on explicit STOP/release,
+# Refresh an active manual motion conservatively for Pelco runaway protection.
+# There is intentionally no short application watchdog: manual motion ends only
+# on explicit STOP/release,
 # another motion mode, serial disconnect, or communication failure.
-JOG_RESEND_INTERVAL_S = 1.0
+JOG_RESEND_INTERVAL_S = 3.5
 PELCO_MIN_COMMAND_GAP_S = 0.32
 
 PROTOCOL_NAME = 'PT503-Control'
@@ -172,9 +173,13 @@ class HeadlessController:
         self._jog_next_resend = 0.0
         # Active continuous JOG key: (pan, tilt, pan_level, tilt_level).
         # The PT unit receives the frame at start/change and then about every
-        # one second while manual JOG remains active. The shorter interval is
-        # intentional for PT503 units that stop sooner than generic Pelco guidance.
+        # every few seconds while manual JOG remains active.  Re-sending too
+        # frequently can make some PT heads visibly restart/hesitate.
         self._active_jog: tuple[Any, Any, int, int] | None = None
+        # TCP jog ownership matters only for disconnect safety.  HTTP/Web JOG
+        # has no persistent socket owner and therefore uses None.  A random TCP
+        # status/health client disconnect must never stop somebody else's JOG.
+        self._jog_owner_client_id: str | None = None
         self._last_serial_tx_at = 0.0
         self._laser_deadline = 0.0
         self._health_misses = 0
@@ -209,6 +214,15 @@ class HeadlessController:
         callback: Callable[[str, dict[str, Any], str | None], None] | None,
     ) -> None:
         self._event_callback = callback
+
+    def jog_owned_by(self, client_id: str) -> bool:
+        """Return True only when this TCP client started the active manual JOG."""
+        with self._lock:
+            return (
+                self._active_jog is not None
+                and self._jog_owner_client_id is not None
+                and self._jog_owner_client_id == client_id
+            )
 
     def protocol_states(self) -> dict[str, str]:
         if self.connected:
@@ -374,7 +388,7 @@ class HeadlessController:
 
                     # Pelco-D runaway protection: while the operator is still
                     # holding manual motion, repeat the same motion command only
-                    # once per second. Do NOT send STOP on a software timer;
+                    # every few seconds. Do NOT send STOP on a software timer;
                     # release/STOP is authoritative.
                     if jogging and now >= self._jog_next_resend:
                         pan, tilt, pan_level, tilt_level = self._active_jog
@@ -677,6 +691,7 @@ class HeadlessController:
         with self._lock:
             self._jog_next_resend = 0.0
             self._active_jog = None
+            self._jog_owner_client_id = None
             self._tracker = None
             if self.connected:
                 try:
@@ -1187,6 +1202,7 @@ class HeadlessController:
                 with self._lock:
                     if pan is PanDirection.STOP and tilt is TiltDirection.STOP:
                         self._active_jog = None
+                        self._jog_owner_client_id = None
                         self._jog_next_resend = 0.0
                         self._tracker = None
                         self.motion_state = "stopped"
@@ -1215,6 +1231,10 @@ class HeadlessController:
                         self._active_jog = jog_key
                         self._jog_next_resend = time.monotonic() + JOG_RESEND_INTERVAL_S
 
+                    # Ownership follows the client that most recently asserted
+                    # the JOG.  HTTP/Web requests have client_id=None and are not
+                    # tied to unrelated TCP socket disconnects.
+                    self._jog_owner_client_id = client_id
                     self._tracker = None
                     self.motion_state = "jog"
 
@@ -1230,6 +1250,7 @@ class HeadlessController:
             if command in {"motion.stop", "cruise.stop", "scan.stop"}:
                 self._jog_next_resend = 0.0
                 self._active_jog = None
+                self._jog_owner_client_id = None
                 self._tracker = None
                 self.motion_state = "stopped"
                 self._finish_pending_motion(
@@ -1239,6 +1260,7 @@ class HeadlessController:
                 # Absolute motion supersedes continuous manual JOG.
                 self._jog_next_resend = 0.0
                 self._active_jog = None
+                self._jog_owner_client_id = None
                 # Legacy speed fields are ignored; every target move uses maximum.
                 params = {**params, "pan_speed": AUTO_PAN_SPEED, "tilt_speed": AUTO_TILT_SPEED, "axis_delay_ms": 0}
             if command in {"scan.speed", "cruise.speed"}:
@@ -1249,6 +1271,7 @@ class HeadlessController:
             if command in {"motion.relative", "preset.call", "preset.goto", "pelco.flip", "pelco.zero_pan", "pattern.run", "preset.scan", "scan.start", "cruise.start", "camera.scan", "home.auto", "home.after"}:
                 self._jog_next_resend = 0.0
                 self._active_jog = None
+                self._jog_owner_client_id = None
                 self._tracker = None
                 for setter in (set_position_speed, set_scan_speed, set_cruise_speed):
                     self.send(setter(self._address, AUTO_PAN_SPEED, AUTO_TILT_SPEED))
@@ -1467,10 +1490,21 @@ class HeadlessController:
         if command == "position.get":
             refresh = self._bool(params, "refresh", True)
             rx = []
-            if refresh:
+            jogging = self._active_jog is not None
+            # Preserve continuous manual motion.  Some PT heads visibly hesitate
+            # when extended query frames are interleaved with a latched JOG.
+            # During JOG return the latest cached position and defer the physical
+            # query until manual motion is released/stopped.
+            if refresh and not jogging:
                 rx.extend(self.send(query_pan(self._address), wait_ms=120))
                 rx.extend(self.send(query_tilt(self._address), wait_ms=120))
-            return {"pan": self.current_pan, "tilt": self.current_tilt, "fresh_query_requested": refresh, "rx": rx}
+            return {
+                "pan": self.current_pan,
+                "tilt": self.current_tilt,
+                "fresh_query_requested": refresh,
+                "query_deferred_for_jog": bool(refresh and jogging),
+                "rx": rx,
+            }
         if command == "monitor.set":
             self.monitor_config["enabled"] = self._bool(params, "enabled")
             if "interval_ms" in params:
@@ -1700,10 +1734,10 @@ pre{white-space:pre-wrap;background:#0c1119;border:1px solid #303b4d;border-radi
 <label>Port</label><select id="port"></select><div class="row"><div><label>Baud</label><input id="baud" value="9600"></div><div><label>Address</label><input id="addr" value="1"></div></div>
 <div class="row"><button onclick="connectSerial()">Connect</button><button class="secondary" onclick="cmd('serial.disconnect',{})">Disconnect</button></div>
 <h2>Move</h2><div class="dpad" aria-label="manual move dial">
-<button class="seg up" title="Tilt Up" onpointerdown="jog('stop','up')" onpointerup="stop()" onpointercancel="stop()">▲</button>
-<button class="seg left" title="Pan Left" onpointerdown="jog('left','stop')" onpointerup="stop()" onpointercancel="stop()">◀</button>
-<button class="seg right" title="Pan Right" onpointerdown="jog('right','stop')" onpointerup="stop()" onpointercancel="stop()">▶</button>
-<button class="seg down" title="Tilt Down" onpointerdown="jog('stop','down')" onpointerup="stop()" onpointercancel="stop()">▼</button>
+<button class="seg up" title="Tilt Up" onpointerdown="jog(event,'stop','up')" onpointerup="stop()">▲</button>
+<button class="seg left" title="Pan Left" onpointerdown="jog(event,'left','stop')" onpointerup="stop()">◀</button>
+<button class="seg right" title="Pan Right" onpointerdown="jog(event,'right','stop')" onpointerup="stop()">▶</button>
+<button class="seg down" title="Tilt Down" onpointerdown="jog(event,'stop','down')" onpointerup="stop()">▼</button>
 <button class="center" title="STOP" onclick="stop()">STOP</button></div>
 <div class="row"><div><label>Pan</label><input id="pan" value="0"></div><div><label>Tilt</label><input id="tilt" value="0"></div></div>
 <button onclick="gotoAbs()">지령위치 이동</button><button class="secondary" onclick="cmd('position.get',{})">위치 조회</button></section>
@@ -1732,7 +1766,7 @@ async function loadCommands(){const r=await cmdSilent('system.commands',{});comm
 async function loadRecipes(){const r=await cmdSilent('recipe.list',{});recipes=r.recipes;const cur=recipe.value;recipe.innerHTML=recipes.map(x=>`<option value="${x.id}">${x.name}</option>`).join('');if(cur)recipe.value=cur;renderPoints()}
 function selectedRecipe(){return recipes.find(r=>r.id===recipe.value)||recipes[0]}function renderPoints(){const r=selectedRecipe();points.innerHTML=(r?.points||[]).map(p=>`<tr><td>${p.order}</td><td>${p.name}</td><td>${p.pan}</td><td>${p.tilt}</td><td><button onclick="gotoPoint('${p.id}')">이동</button></td></tr>`).join('')}
 async function scan(){await cmd('serial.scan',{baudrates:[9600],first_address:1,last_address:1,timeout_ms:200})}async function connectSerial(){await cmd('serial.connect',{port:port.value,baudrate:+baud.value,address:+addr.value})}
-async function jog(p,t){await cmd('motion.jog',{pan:p,tilt:t,pan_level:5,tilt_level:5})}async function stop(){await cmd('motion.stop',{})}async function gotoAbs(){await cmd('motion.absolute',{pan:+pan.value,tilt:+tilt.value})}
+async function jog(e,p,t){try{e?.currentTarget?.setPointerCapture?.(e.pointerId)}catch(_e){}await cmd('motion.jog',{pan:p,tilt:t,pan_level:5,tilt_level:5})}async function stop(){await cmd('motion.stop',{})}async function gotoAbs(){await cmd('motion.absolute',{pan:+pan.value,tilt:+tilt.value})}
 async function newRecipe(){const name=prompt('Recipe name','Recipe');if(name)await cmd('recipe.upsert',{name})}async function savePoint(){const r=selectedRecipe();if(!r)return;await cmd('point.upsert',{recipe_id:r.id,name:pname.value||'Point',pan:+ppan.value,tilt:+ptilt.value})}
 function loadTemplate(){apiParams.value=JSON.stringify(templates[apiCommand.value]||{},null,2)}
 async function runApiCommand(){let params={};try{params=JSON.parse(apiParams.value||'{}')}catch(e){log('ERR JSON params -> '+e.message);return}await cmd(apiCommand.value,params)}
@@ -2069,10 +2103,17 @@ class TcpJsonHandler(socketserver.StreamRequestHandler):
     def _disconnect_safety(self) -> None:
         controller = self.server.controller
         try:
-            if controller.motion_state == "jog":
-                controller.command("motion.stop", {})
-            if controller.laser_on:
-                controller.command("laser.off", {})
+            # Critical: a status/health TCP client may connect and disconnect
+            # without owning manual motion.  Stopping on every disconnect caused
+            # unrelated clients to inject a physical STOP during Web/gamepad JOG.
+            # Only the TCP client that most recently asserted the active JOG owns
+            # disconnect-stop safety.
+            if controller.jog_owned_by(self.client_id):
+                controller.command(
+                    "motion.stop", {}, client_id=self.client_id, request_id=None
+                )
+            # Laser ownership is not tracked here; do not let an unrelated TCP
+            # disconnect turn off a laser controlled by another interface.
         except (HeadlessApiError, OSError, serial.SerialException):
             pass
 

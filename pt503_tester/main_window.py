@@ -165,8 +165,9 @@ DEFAULT_DRAWING_DIR = Path(r"C:\Users\gram\Desktop\트래커 관련\도면 이�
 STARTUP_BAUDRATE = 9600
 STARTUP_SCAN_TIMEOUT_MS = 200
 STARTUP_SCAN_DELAY_MS = 250
-PELCOD_MANUAL_REFRESH_MS = 1000
+PELCOD_MANUAL_REFRESH_MS = int(gamepad_map.RUNAWAY_RESEND_SECONDS * 1000)
 PELCOD_MIN_DYNAMIC_UPDATE_S = 0.35
+GAMEPAD_CENTER_STOP_DELAY_S = 0.20
 
 
 class SearchDialog(QDialog):
@@ -476,6 +477,9 @@ class MainWindow(QMainWindow):
         self.laser_is_on = False
         self.gamepad_motion: tuple[PanDirection, TiltDirection, int, int] | None = None
         self.gamepad_last_send = 0.0
+        # A single raw-axis sample can briefly fall inside the deadzone on Linux.
+        # Require a short, sustained centered state before sending physical STOP.
+        self.gamepad_center_since: float | None = None
         self.gamepad_previous_axes: tuple[float, ...] = ()
         self.gamepad_previous_buttons: tuple[bool, ...] = ()
         self.gamepad_previous_hat = (0, 0)
@@ -503,7 +507,8 @@ class MainWindow(QMainWindow):
         self.jog_keepalive = QTimer(self)
         # Pelco-D runaway protection typically stops unattended motion after
         # at a device-dependent interval. PT503 field behavior can stop sooner than
-        # generic Pelco guidance, so refresh an active manual command every 1 s.
+        # generic Pelco guidance.  Refresh only every few seconds so the PT
+        # controller does not repeatedly restart the same continuous motion.
         # Release/STOP remains the authoritative software stop condition.
         self.jog_keepalive.setInterval(PELCOD_MANUAL_REFRESH_MS)
         self.jog_keepalive.timeout.connect(self._repeat_jog)
@@ -2334,13 +2339,20 @@ class MainWindow(QMainWindow):
             return self._api_completion_config()
         if command == "position.get":
             refresh = self._api_bool(params, "refresh", True)
+            manual_jog_active = (
+                self.current_jog is not None
+                or self.gamepad_motion is not None
+                or self.api_motion_owner is not None
+            )
             if refresh:
                 self._api_require_connected()
-                self._query_all_positions()
+                if not manual_jog_active:
+                    self._query_all_positions()
             return {
                 "pan": self.current_pan,
                 "tilt": self.current_tilt,
                 "fresh_query_requested": refresh,
+                "query_deferred_for_jog": bool(refresh and manual_jog_active),
             }
         if command == "monitor.set":
             enabled = self._api_bool(params, "enabled")
@@ -3512,9 +3524,20 @@ class MainWindow(QMainWindow):
         if self.current_jog is not None:
             return
         if motion is None:
-            self._stop_gamepad_motion(send_stop=True)
+            if self.gamepad_motion is None:
+                self.gamepad_center_since = None
+                return
+            now = time.perf_counter()
+            if self.gamepad_center_since is None:
+                self.gamepad_center_since = now
+                return
+            if now - self.gamepad_center_since >= GAMEPAD_CENTER_STOP_DELAY_S:
+                self._stop_gamepad_motion(send_stop=True)
+                self.gamepad_center_since = None
             return
 
+        # Any valid deflection cancels a pending center/deadzone STOP.
+        self.gamepad_center_since = None
         pan, tilt, pan_speed, tilt_speed = motion
         if self.invert_pan.isChecked():
             pan = {
@@ -3542,7 +3565,7 @@ class MainWindow(QMainWindow):
         )
         # Raw analog axes fluctuate slightly even while the user's hand is still.
         # Respect Pelco-D command spacing for real speed changes, and resend a
-        # stable command only every five seconds for runaway protection.
+        # stable command only at the configured runaway refresh interval.
         elapsed = now - self.gamepad_last_send
         speed_update_due = speed_changed and elapsed >= PELCOD_MIN_DYNAMIC_UPDATE_S
         keepalive_due = previous is not None and elapsed >= (PELCOD_MANUAL_REFRESH_MS / 1000.0)
@@ -3567,6 +3590,7 @@ class MainWindow(QMainWindow):
         was_moving = self.gamepad_motion is not None
         self.gamepad_motion = None
         self.gamepad_last_send = 0.0
+        self.gamepad_center_since = None
         if was_moving and send_stop and self.is_connected:
             self._send(stop(self._address()))
 
@@ -3721,8 +3745,9 @@ class MainWindow(QMainWindow):
                 TiltDirection.DOWN: TiltDirection.UP,
             }.get(tilt, tilt)
         self.current_jog = (pan, tilt)
-        # Send immediately, then refresh once per second while the operator keeps
-        # manual JOG active. Release/STOP remains the authoritative stop condition.
+        # Send immediately, then refresh only at the Pelco runaway-protection
+        # interval while the operator keeps manual JOG active. Release/STOP is
+        # the authoritative stop condition.
         self._repeat_jog()
         if self.is_connected:
             self.jog_keepalive.start()
@@ -3750,6 +3775,7 @@ class MainWindow(QMainWindow):
         self.current_jog = None
         self.gamepad_motion = None
         self.gamepad_last_send = 0.0
+        self.gamepad_center_since = None
         self.api_jog_watchdog.stop()
         self.api_motion_owner = None
         self.api_jog_key = None

@@ -50,6 +50,8 @@ let padConnected = false;
 
 let padActive = false;
 let padCentered = false;
+let padCenteredSince = 0;
+let padMissingSince = 0;
 
 // 강제정지 후에는 스틱을 중앙으로 한 번 복귀시켜야
 // 다시 움직일 수 있도록 하는 안전장치
@@ -166,6 +168,8 @@ const PAD_BUTTON = Object.freeze({
 
 
 const PAD_DEADZONE = 0.15;
+const PAD_CENTER_STOP_DELAY_MS = 200;
+const PAD_MISSING_STOP_DELAY_MS = 500;
 
 
 // ============================================================================
@@ -972,6 +976,12 @@ async function stopJog()
 
     padCentered =
         false;
+
+    padCenteredSince =
+        0;
+
+    padMissingSince =
+        0;
 
     // 스틱을 중앙으로 다시 놓기 전까지
     // 재동작 방지
@@ -7201,7 +7211,15 @@ setInterval(
         {
             if (padActive)
             {
-                guarded(stopJog)();
+                const now = performance.now();
+                if (!padMissingSince)
+                {
+                    padMissingSince = now;
+                }
+                else if (now - padMissingSince >= PAD_MISSING_STOP_DELAY_MS)
+                {
+                    guarded(stopJog)();
+                }
             }
 
 
@@ -7219,6 +7237,9 @@ setInterval(
             return;
         }
 
+
+        padMissingSince =
+            0;
 
         // --------------------------------------------------------------------
         // RAW 입력 읽기
@@ -7494,22 +7515,39 @@ setInterval(
 
             if (padActive)
             {
-                jog =
-                    null;
+                const now = performance.now();
+                if (!padCenteredSince)
+                {
+                    padCenteredSince = now;
+                }
+                else if (now - padCenteredSince >= PAD_CENTER_STOP_DELAY_MS)
+                {
+                    jog =
+                        null;
 
 
-                padActive =
-                    false;
+                    padActive =
+                        false;
 
 
-                guarded(
-                    () =>
-                        cmd(
-                            'motion.stop',
-                            {},
-                            true
-                        )
-                )();
+                    padCenteredSince =
+                        0;
+
+
+                    guarded(
+                        () =>
+                            cmd(
+                                'motion.stop',
+                                {},
+                                true
+                            )
+                    )();
+                }
+            }
+            else
+            {
+                padCenteredSince =
+                    0;
             }
 
 
@@ -7523,6 +7561,9 @@ setInterval(
 
         else
         {
+            padCenteredSince =
+                0;
+
             // STOP 직후 스틱이 계속 기울어져 있으면
             // 재동작 금지
             if (!padRequireCenter)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -54,6 +55,7 @@ class RemoteClientWindow(QMainWindow):
         self._pending: dict[str, ResponseCallback | None] = {}
         self._current_jog: tuple[str, str] | None = None
         self._gamepad_motion: tuple[str, str] | None = None
+        self._gamepad_center_since: float | None = None
         self._previous_buttons: tuple[bool, ...] = ()
         self._previous_hat = (0, 0)
         self._laser_on = False
@@ -69,8 +71,8 @@ class RemoteClientWindow(QMainWindow):
         self.jog_timer = QTimer(self)
         # Client-side liveness refresh. Matching JOG requests are deduplicated by the
         # hardware-owning server, while the physical Pelco motion is refreshed
-        # once per second until release/STOP.
-        self.jog_timer.setInterval(1000)
+        # only at the server's runaway-protection interval until release/STOP.
+        self.jog_timer.setInterval(int(gamepad_map.RUNAWAY_RESEND_SECONDS * 1000))
         self.jog_timer.timeout.connect(self._send_current_jog)
 
         self.gamepad_manager = GamepadManager(self)
@@ -499,6 +501,7 @@ class RemoteClientWindow(QMainWindow):
     def _stop_motion(self) -> None:
         self._current_jog = None
         self._gamepad_motion = None
+        self._gamepad_center_since = None
         self.jog_timer.stop()
         self._send_command("motion.stop", {}, quiet=True)
 
@@ -546,9 +549,15 @@ class RemoteClientWindow(QMainWindow):
         motion = axes_to_motion(state.axes, 1, 1)
         if motion is None:
             if self._gamepad_motion is not None:
-                self._stop_motion()
-            self._gamepad_motion = None
+                now = time.perf_counter()
+                if self._gamepad_center_since is None:
+                    self._gamepad_center_since = now
+                elif now - self._gamepad_center_since >= 0.20:
+                    self._stop_motion()
+            else:
+                self._gamepad_center_since = None
         else:
+            self._gamepad_center_since = None
             pan, tilt, _pan_speed, _tilt_speed = motion
             pan_text = {
                 PanDirection.LEFT: "left",
@@ -566,8 +575,8 @@ class RemoteClientWindow(QMainWindow):
             self._gamepad_motion = next_motion
             self._current_jog = next_motion
 
-            # pygame polling is 40 ms, but the server owns the 5 s Pelco-D
-            # runaway refresh. Send only when the requested direction changes.
+            # pygame polling is 40 ms, but the server owns Pelco-D runaway
+            # refresh. Send only when the requested direction changes.
             if changed:
                 self._send_current_jog()
 
