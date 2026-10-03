@@ -253,21 +253,27 @@ output { padding: 8px 0; }
 .cube-top { transform: rotateX(90deg) translateZ(35px); }
 .cube-bottom { transform: rotateX(-90deg) translateZ(35px); }
 .cube-right { transform: rotateY(90deg) translateZ(35px); }
-.drawing-point-scroll { max-height: 520px; overflow-x: hidden; }
+.drawing-point-scroll { max-height: 520px; overflow-x: auto; }
 .drawing-point-table { width: 100%; min-width: 0; table-layout: fixed; }
-.drawing-calibration-panel .drawing-point-table { min-width: 690px; }
+.drawing-calibration-panel .drawing-point-table { min-width: 650px; }
 .drawing-calibration-panel .drawing-point-table th,
-.drawing-calibration-panel .drawing-point-table td { width: auto; text-align: right; }
+.drawing-calibration-panel .drawing-point-table td { text-align: right; }
 .drawing-calibration-panel .drawing-point-table th:nth-child(1),
-.drawing-calibration-panel .drawing-point-table td:nth-child(1) { width: 38px; text-align: center; }
+.drawing-calibration-panel .drawing-point-table td:nth-child(1) { width: 36px; text-align: center; }
 .drawing-calibration-panel .drawing-point-table th:nth-child(2),
-.drawing-calibration-panel .drawing-point-table td:nth-child(2) { width: 92px; text-align: left; }
+.drawing-calibration-panel .drawing-point-table td:nth-child(2) { width: 86px; text-align: left; }
+.drawing-calibration-panel .drawing-point-table th:nth-child(3),
+.drawing-calibration-panel .drawing-point-table td:nth-child(3),
+.drawing-calibration-panel .drawing-point-table th:nth-child(4),
+.drawing-calibration-panel .drawing-point-table td:nth-child(4) { width: 82px; }
+.drawing-calibration-panel .drawing-point-table th:nth-child(5),
+.drawing-calibration-panel .drawing-point-table td:nth-child(5) { width: 72px; }
 .drawing-calibration-panel .drawing-point-table th:nth-child(6),
 .drawing-calibration-panel .drawing-point-table td:nth-child(6) { width: 44px; text-align: center; }
 .drawing-calibration-panel .drawing-point-table th:nth-child(7),
 .drawing-calibration-panel .drawing-point-table td:nth-child(7),
 .drawing-calibration-panel .drawing-point-table th:nth-child(8),
-.drawing-calibration-panel .drawing-point-table td:nth-child(8) { width: 66px; }
+.drawing-calibration-panel .drawing-point-table td:nth-child(8) { width: 104px; }
 .drawing-point-table th:nth-child(1), .drawing-point-table td:nth-child(1) { width: 34px; text-align: center; }
 .drawing-point-table th:nth-child(2), .drawing-point-table td:nth-child(2) { width: 28px; text-align: center; }
 .drawing-point-table th:nth-child(3), .drawing-point-table td:nth-child(3) { width: 78px; }

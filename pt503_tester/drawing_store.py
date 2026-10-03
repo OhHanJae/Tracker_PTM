@@ -543,6 +543,26 @@ class DrawingStore:
         self.save()
         return self._public_record(record, include_points=True)
 
+    def reset_calibration(self, drawing_id: str) -> dict[str, Any]:
+        record = self._record(drawing_id)
+        point_groups = (
+            record.get("points_by_file", {}).values()
+            if record.get("source_kind") in CAD_PACKAGE_KINDS
+            else (self._points(record),)
+        )
+        for points in point_groups:
+            for point in points:
+                point["pan"] = None
+                point["tilt"] = None
+                point["calibration"] = False
+                point["calibration_slot"] = None
+        record["calibration"] = None
+        if record.get("source_kind") in CAD_PACKAGE_KINDS:
+            record["calibration_by_file"] = {}
+        record["updated"] = now_iso()
+        self.save()
+        return self._public_record(record, include_points=True)
+
     def estimate_xy(self, drawing_id: str, pan: float, tilt: float) -> dict[str, Any]:
         record = self._record(drawing_id)
         drawing_points = [DrawingPoint.from_dict(item) for item in self._points(record)]

@@ -5289,6 +5289,25 @@ async function calibrateDrawing()
 }
 
 
+async function resetDrawingCalibration()
+{
+    if (!activeDrawing)
+    {
+        throw Error('먼저 도면을 선택하세요.');
+    }
+    if (!confirm('이 도면의 모든 포인트 그룹에서 Pan/Tilt 값과 캘리브레이션 기준을 지울까요?'))
+    {
+        return;
+    }
+    const result = await cmd('drawing.reset_calibration', {
+        drawing_id: activeDrawing.id
+    }, true);
+    activeDrawing = result.drawing;
+    renderDrawingPanel();
+    $('notice').textContent = '도면의 Pan/Tilt 값과 캘리브레이션 기준을 모두 지웠습니다.';
+}
+
+
 function focusDrawingPointRow(pointId)
 {
     const row = Array.from(document.querySelectorAll('#drawingPoints tr'))
@@ -5589,6 +5608,12 @@ if ($('drawingHomeView'))
 $('calibrateDrawing').onclick =
     guarded(
         calibrateDrawing
+    );
+
+
+$('resetDrawingCalibration').onclick =
+    guarded(
+        resetDrawingCalibration
     );
 
 
