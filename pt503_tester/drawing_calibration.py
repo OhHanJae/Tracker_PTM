@@ -175,17 +175,46 @@ class DrawingPoint:
 class CalibrationFit:
     origin: Vector3
     scale: float
-    pan_coefficients: tuple[float, float, float, float]
-    tilt_coefficients: tuple[float, float, float, float]
     rms_pan_error: float
     rms_tilt_error: float
     points_used: int
+    pan_coefficients: tuple[float, float, float, float] | None = None
+    tilt_coefficients: tuple[float, float, float, float] | None = None
+    coordinate_axes: tuple[int, int] | None = None
+    projective_coefficients: tuple[float, ...] | None = None
+    pan_origin: float = 0.0
+    tilt_origin: float = 0.0
 
     def predict(self, point: DrawingPoint) -> tuple[float, float]:
+        if self.coordinate_axes is not None and self.projective_coefficients is not None:
+            return self._predict_projective(point)
+        if self.pan_coefficients is None or self.tilt_coefficients is None:
+            raise CalibrationError("캘리브레이션 계수가 없습니다.")
         features = _normalized_features(point.position, self.origin, self.scale)
         pan = _dot4(self.pan_coefficients, features) % 360.0
         tilt = max(-60.0, min(60.0, _dot4(self.tilt_coefficients, features)))
         return round(pan, 2), round(tilt, 2)
+
+    def _predict_projective(self, point: DrawingPoint) -> tuple[float, float]:
+        assert self.coordinate_axes is not None
+        assert self.projective_coefficients is not None
+        coordinates = point.position
+        u = (coordinates[self.coordinate_axes[0]] - self.origin[self.coordinate_axes[0]]) / self.scale
+        v = (coordinates[self.coordinate_axes[1]] - self.origin[self.coordinate_axes[1]]) / self.scale
+        h = self.projective_coefficients
+        denominator = h[6] * u + h[7] * v + 1.0
+        if abs(denominator) < 1e-9:
+            raise CalibrationError("보정 범위 밖의 도면 포인트입니다.")
+        image_x = (h[0] * u + h[1] * v + h[2]) / denominator
+        image_y = (h[3] * u + h[4] * v + h[5]) / denominator
+        direction = _motor_direction_from_image(
+            image_x, image_y, self.pan_origin, self.tilt_origin
+        )
+        pan = math.degrees(math.atan2(direction[0], direction[2])) % 360.0
+        tilt = math.degrees(
+            math.atan2(direction[1], math.hypot(direction[0], direction[2]))
+        )
+        return round(pan, 2), round(max(-60.0, min(60.0, tilt)), 2)
 
 
 @dataclass(frozen=True)
@@ -282,6 +311,10 @@ def fit_affine_calibration(points: list[DrawingPoint]) -> CalibrationFit:
         raise CalibrationError("Pan/Tilt가 지정된 캘리브레이션 포인트가 최소 4개 필요합니다.")
 
     origin, scale = _calibration_origin_scale(taught)
+    planar_axes = _planar_coordinate_axes(taught)
+    if planar_axes is not None:
+        return _fit_planar_projective_calibration(taught, origin, scale, planar_axes)
+
     matrix = [_normalized_features(point.position, origin, scale) for point in taught]
     pan_values = _unwrap_angles([float(point.pan) for point in taught if point.pan is not None])
     tilt_values = [float(point.tilt) for point in taught if point.tilt is not None]
@@ -299,11 +332,62 @@ def fit_affine_calibration(points: list[DrawingPoint]) -> CalibrationFit:
     return CalibrationFit(
         origin=origin,
         scale=scale,
-        pan_coefficients=pan_coefficients,
-        tilt_coefficients=tilt_coefficients,
         rms_pan_error=_rms(pan_errors),
         rms_tilt_error=_rms(tilt_errors),
         points_used=len(taught),
+        pan_coefficients=pan_coefficients,
+        tilt_coefficients=tilt_coefficients,
+    )
+
+
+def _fit_planar_projective_calibration(
+    points: list[DrawingPoint],
+    origin: Vector3,
+    scale: float,
+    coordinate_axes: tuple[int, int],
+) -> CalibrationFit:
+    pan_values = _unwrap_angles([float(point.pan) for point in points if point.pan is not None])
+    tilt_values = [float(point.tilt) for point in points if point.tilt is not None]
+    pan_origin = sum(pan_values) / len(pan_values)
+    tilt_origin = sum(tilt_values) / len(tilt_values)
+    rows: list[list[float]] = []
+    values: list[float] = []
+    for point, pan, tilt in zip(points, pan_values, tilt_values, strict=True):
+        u = (point.position[coordinate_axes[0]] - origin[coordinate_axes[0]]) / scale
+        v = (point.position[coordinate_axes[1]] - origin[coordinate_axes[1]]) / scale
+        image_x, image_y = _motor_image_coordinates(pan, tilt, pan_origin, tilt_origin)
+        rows.append([u, v, 1.0, 0.0, 0.0, 0.0, -image_x * u, -image_x * v])
+        values.append(image_x)
+        rows.append([0.0, 0.0, 0.0, u, v, 1.0, -image_y * u, -image_y * v])
+        values.append(image_y)
+
+    coefficients = tuple(_least_squares(rows, values))
+    fit = CalibrationFit(
+        origin=origin,
+        scale=scale,
+        rms_pan_error=0.0,
+        rms_tilt_error=0.0,
+        points_used=len(points),
+        coordinate_axes=coordinate_axes,
+        projective_coefficients=coefficients,
+        pan_origin=pan_origin,
+        tilt_origin=tilt_origin,
+    )
+    predictions = [fit.predict(point) for point in points]
+    return CalibrationFit(
+        origin=origin,
+        scale=scale,
+        rms_pan_error=_rms(
+            [_angle_error(predicted[0], pan) for predicted, pan in zip(predictions, pan_values, strict=True)]
+        ),
+        rms_tilt_error=_rms(
+            [predicted[1] - tilt for predicted, tilt in zip(predictions, tilt_values, strict=True)]
+        ),
+        points_used=len(points),
+        coordinate_axes=coordinate_axes,
+        projective_coefficients=coefficients,
+        pan_origin=pan_origin,
+        tilt_origin=tilt_origin,
     )
 
 
@@ -1350,6 +1434,69 @@ def _calibration_origin_scale(points: list[DrawingPoint]) -> tuple[Vector3, floa
     return origin, float(span)
 
 
+def _planar_coordinate_axes(points: list[DrawingPoint]) -> tuple[int, int] | None:
+    coordinates = list(zip(*(point.position for point in points), strict=True))
+    spans = [max(axis) - min(axis) for axis in coordinates]
+    ordered = sorted(range(3), key=lambda index: spans[index], reverse=True)
+    if spans[ordered[1]] <= max(spans[ordered[0]], 1.0) * 1e-6:
+        raise CalibrationError("캘리브레이션 기준점을 서로 멀리 떨어진 위치로 선택하세요.")
+    if spans[ordered[2]] > max(spans[ordered[0]], 1.0) * 1e-6:
+        return None
+    return ordered[0], ordered[1]
+
+
+def _motor_basis(pan_origin: float, tilt_origin: float) -> tuple[Vector3, Vector3, Vector3]:
+    pan = math.radians(pan_origin)
+    tilt = math.radians(tilt_origin)
+    forward = (
+        math.cos(tilt) * math.sin(pan),
+        math.sin(tilt),
+        math.cos(tilt) * math.cos(pan),
+    )
+    right = (math.cos(pan), 0.0, -math.sin(pan))
+    up = (
+        -math.sin(tilt) * math.sin(pan),
+        math.cos(tilt),
+        -math.sin(tilt) * math.cos(pan),
+    )
+    return right, up, forward
+
+
+def _motor_image_coordinates(
+    pan: float,
+    tilt: float,
+    pan_origin: float,
+    tilt_origin: float,
+) -> tuple[float, float]:
+    pan_radians = math.radians(pan)
+    tilt_radians = math.radians(tilt)
+    direction = (
+        math.cos(tilt_radians) * math.sin(pan_radians),
+        math.sin(tilt_radians),
+        math.cos(tilt_radians) * math.cos(pan_radians),
+    )
+    right, up, forward = _motor_basis(pan_origin, tilt_origin)
+    local_x = sum(a * b for a, b in zip(direction, right, strict=True))
+    local_y = sum(a * b for a, b in zip(direction, up, strict=True))
+    local_z = sum(a * b for a, b in zip(direction, forward, strict=True))
+    if local_z <= 1e-6:
+        raise CalibrationError("캘리브레이션 각도 범위가 너무 넓습니다.")
+    return local_x / local_z, local_y / local_z
+
+
+def _motor_direction_from_image(
+    image_x: float,
+    image_y: float,
+    pan_origin: float,
+    tilt_origin: float,
+) -> Vector3:
+    right, up, forward = _motor_basis(pan_origin, tilt_origin)
+    return tuple(
+        image_x * right[index] + image_y * up[index] + forward[index]
+        for index in range(3)
+    )  # type: ignore[return-value]
+
+
 def _normalized_features(position: Vector3, origin: Vector3, scale: float) -> tuple[float, float, float, float]:
     return (
         (position[0] - origin[0]) / scale,
@@ -1374,6 +1521,30 @@ def _ridge_least_squares(
     for i in range(4):
         normal[i][i] += diagonal_scale * 1e-9
     return tuple(_solve_linear(normal, vector))  # type: ignore[return-value]
+
+
+def _least_squares(matrix: list[list[float]], values: list[float]) -> list[float]:
+    if not matrix or len(matrix) != len(values):
+        raise CalibrationError("캘리브레이션 데이터가 비어 있습니다.")
+    width = len(matrix[0])
+    if any(len(row) != width for row in matrix):
+        raise CalibrationError("캘리브레이션 데이터 크기가 일치하지 않습니다.")
+    normal = [[0.0 for _ in range(width)] for _ in range(width)]
+    vector = [0.0 for _ in range(width)]
+    for row, value in zip(matrix, values, strict=True):
+        for i in range(width):
+            vector[i] += row[i] * value
+            for j in range(width):
+                normal[i][j] += row[i] * row[j]
+    diagonal_scale = max(max(abs(normal[i][i]) for i in range(width)), 1.0)
+    for i in range(width):
+        normal[i][i] += diagonal_scale * 1e-12
+    try:
+        return _solve_linear(normal, vector)
+    except CalibrationError as exc:
+        raise CalibrationError(
+            "캘리브레이션 기준점을 도면 영역의 모서리 방향으로 넓게 배치하세요."
+        ) from exc
 
 
 def _solve_linear(matrix: list[list[float]], vector: list[float]) -> list[float]:

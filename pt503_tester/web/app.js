@@ -181,8 +181,7 @@ const fallbackTemplates = {
     'motion.jog': {
         pan: 'right',
         tilt: 'stop',
-        pan_level: 5,
-        tilt_level: 5
+        speed_level: 5
     },
 
     'motion.absolute': {
@@ -640,20 +639,17 @@ for (
 
 const speedPercent = [
     1,
+    3,
+    8,
     15,
-    29,
-    43,
-    58,
-    72,
-    86,
+    30,
+    50,
+    70,
     100
 ];
 
 
-for (
-    const id
-    of ['panLevel', 'tiltLevel']
-)
+for (const id of ['speedLevel'])
 {
     speedPercent.forEach(
         (percent, index) => {
@@ -670,6 +666,7 @@ for (
 
     $(id).value =
         localStorage.getItem(id)
+        || localStorage.getItem('panLevel')
         || '5';
 
 
@@ -1144,14 +1141,9 @@ async function sendJog()
             {
                 ...jog,
 
-                pan_level:
+                speed_level:
                     Number(
-                        $('panLevel').value
-                    ),
-
-                tilt_level:
-                    Number(
-                        $('tiltLevel').value
+                        $('speedLevel').value
                     )
             },
 
@@ -4795,7 +4787,7 @@ function renderDrawingInfo()
     $('drawingCalibrationInfo').textContent =
         calibration
             ? `캘리브레이션 완료: 기준점 ${calibration.points_used}개, Pan RMS ${calibration.rms_pan_error}°, Tilt RMS ${calibration.rms_tilt_error}°`
-            : '도면 또는 목록에서 기준점 4~10개를 선택하고 현재 Pan/Tilt 값을 적용한 뒤 캘리브레이션하세요.';
+            : '도면 영역을 넓게 둘러싸는 기준점 4~10개를 선택하고 현재 Pan/Tilt 값을 적용한 뒤 캘리브레이션하세요.';
 }
 
 
@@ -6870,138 +6862,11 @@ function handlePovSpeed(pov)
     }
 
 
-    switch (pov)
+    const delta = [1, 2, 3].includes(pov) ? +1 : [5, 6, 7].includes(pov) ? -1 : 0;
+    if (delta)
     {
-        // ↑ Tilt +
-        case 0:
-
-            setSpeedStep(
-                'tiltLevel',
-                +1
-            );
-
-            $('padStatus').textContent =
-                'Tilt 속도 +1';
-
-            break;
-
-
-        // ↗ Pan + / Tilt +
-        case 1:
-
-            setSpeedStep(
-                'panLevel',
-                +1
-            );
-
-            setSpeedStep(
-                'tiltLevel',
-                +1
-            );
-
-            $('padStatus').textContent =
-                'Pan +1 / Tilt +1';
-
-            break;
-
-
-        // → Pan +
-        case 2:
-
-            setSpeedStep(
-                'panLevel',
-                +1
-            );
-
-            $('padStatus').textContent =
-                'Pan 속도 +1';
-
-            break;
-
-
-        // ↘ Pan + / Tilt -
-        case 3:
-
-            setSpeedStep(
-                'panLevel',
-                +1
-            );
-
-            setSpeedStep(
-                'tiltLevel',
-                -1
-            );
-
-            $('padStatus').textContent =
-                'Pan +1 / Tilt -1';
-
-            break;
-
-
-        // ↓ Tilt -
-        case 4:
-
-            setSpeedStep(
-                'tiltLevel',
-                -1
-            );
-
-            $('padStatus').textContent =
-                'Tilt 속도 -1';
-
-            break;
-
-
-        // ↙ Pan - / Tilt -
-        case 5:
-
-            setSpeedStep(
-                'panLevel',
-                -1
-            );
-
-            setSpeedStep(
-                'tiltLevel',
-                -1
-            );
-
-            $('padStatus').textContent =
-                'Pan -1 / Tilt -1';
-
-            break;
-
-
-        // ← Pan -
-        case 6:
-
-            setSpeedStep(
-                'panLevel',
-                -1
-            );
-
-            $('padStatus').textContent =
-                'Pan 속도 -1';
-
-            break;
-
-
-        // ↖ Pan - / Tilt +
-        case 7:
-
-            setSpeedStep(
-                'panLevel',
-                -1
-            );
-
-            setSpeedStep(
-                'tiltLevel',
-                +1
-            );
-
-            $('padStatus').textContent =
-                'Pan -1 / Tilt +1';
-
-            break;
+        setSpeedStep('speedLevel', delta);
+        $('padStatus').textContent = `Pan/Tilt 통합 속도 ${delta > 0 ? '+' : ''}${delta}`;
     }
 }
 
@@ -7106,9 +6971,7 @@ function renderGamepadMonitor(
 
         `D-Pad / Axis 9          : ${povName(pov)}`,
 
-        `Pan 속도 단계           : ${$('panLevel').value} / 8`,
-
-        `Tilt 속도 단계          : ${$('tiltLevel').value} / 8`,
+        `Pan/Tilt 통합 속도     : ${$('speedLevel').value} / 8`,
 
         '',
 

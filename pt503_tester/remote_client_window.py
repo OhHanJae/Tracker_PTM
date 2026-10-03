@@ -137,12 +137,12 @@ class RemoteClientWindow(QMainWindow):
 
         move_group = QGroupBox("수동 조작")
         move_layout = QGridLayout(move_group)
-        self.pan_level = self._level_combo()
-        self.tilt_level = self._level_combo()
-        move_layout.addWidget(QLabel("Pan 단계"), 0, 0)
-        move_layout.addWidget(self.pan_level, 0, 1)
-        move_layout.addWidget(QLabel("Tilt 단계"), 0, 2)
-        move_layout.addWidget(self.tilt_level, 0, 3)
+        self.speed_level = self._level_combo()
+        # Keep aliases for older internal callers while exposing one control.
+        self.pan_level = self.speed_level
+        self.tilt_level = self.speed_level
+        move_layout.addWidget(QLabel("Pan/Tilt 통합 속도"), 0, 0)
+        move_layout.addWidget(self.speed_level, 0, 1, 1, 3)
         for text, row, column, pan, tilt in (
             ("▲", 1, 1, "stop", "up"),
             ("◀", 2, 0, "left", "stop"),
@@ -230,7 +230,7 @@ class RemoteClientWindow(QMainWindow):
     @staticmethod
     def _level_combo() -> QComboBox:
         combo = QComboBox()
-        for index, percent in enumerate((1, 15, 29, 43, 58, 72, 86, 100), start=1):
+        for index, percent in enumerate((1, 3, 8, 15, 30, 50, 70, 100), start=1):
             combo.addItem(f"{index}단계 ({percent}%)", index)
         combo.setCurrentIndex(4)
         return combo
@@ -492,8 +492,7 @@ class RemoteClientWindow(QMainWindow):
             {
                 "pan": pan,
                 "tilt": tilt,
-                "pan_level": int(self.pan_level.currentData()),
-                "tilt_level": int(self.tilt_level.currentData()),
+                "speed_level": int(self.speed_level.currentData()),
             },
             quiet=True,
         )
@@ -587,8 +586,7 @@ class RemoteClientWindow(QMainWindow):
             else (0, 0)
         )
         if current_hat != self._previous_hat:
-            self._step_combo(self.pan_level, current_hat[0])
-            self._step_combo(self.tilt_level, current_hat[1])
+            self._step_combo(self.speed_level, current_hat[0])
             self._previous_hat = current_hat
 
         buttons = state.buttons

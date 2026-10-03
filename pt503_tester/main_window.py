@@ -680,24 +680,20 @@ class MainWindow(QMainWindow):
 
         jog_group = QGroupBox("수동 Jog · 버튼을 누르는 동안 이동, 놓으면 STOP")
         jog_layout = QGridLayout(jog_group)
-        self.pan_speed = QSpinBox()
-        self.pan_speed.setRange(1, 8)
-        self.pan_speed.setValue(5)
-        self.pan_speed.setSuffix(" 단계")
-        self.tilt_speed = QSpinBox()
-        self.tilt_speed.setRange(1, 8)
-        self.tilt_speed.setValue(5)
-        self.tilt_speed.setSuffix(" 단계")
-        speed_help = "1~8단계: 1%, 15%, 29%, 43%, 58%, 72%, 86%, 100%"
-        self.pan_speed.setToolTip(speed_help)
-        self.tilt_speed.setToolTip(speed_help)
+        self.manual_speed = QSpinBox()
+        self.manual_speed.setRange(1, 8)
+        self.manual_speed.setValue(5)
+        self.manual_speed.setSuffix(" 단계")
+        speed_help = "1~8단계: 1%, 3%, 8%, 15%, 30%, 50%, 70%, 100%"
+        self.manual_speed.setToolTip(speed_help)
+        # Keep the former attribute names for internal/API compatibility.
+        self.pan_speed = self.manual_speed
+        self.tilt_speed = self.manual_speed
         self.invert_pan = QCheckBox("Pan 방향 반전")
         self.invert_tilt = QCheckBox("Tilt 방향 반전")
 
-        jog_layout.addWidget(QLabel("Pan 수동 속도 (1~8단계)"), 0, 0)
-        jog_layout.addWidget(self.pan_speed, 0, 1)
-        jog_layout.addWidget(QLabel("Tilt 수동 속도 (1~8단계)"), 0, 2)
-        jog_layout.addWidget(self.tilt_speed, 0, 3)
+        jog_layout.addWidget(QLabel("Pan/Tilt 수동 속도 (1~8단계)"), 0, 0)
+        jog_layout.addWidget(self.manual_speed, 0, 1, 1, 3)
         jog_layout.addWidget(self.invert_pan, 1, 0, 1, 2)
         jog_layout.addWidget(self.invert_tilt, 1, 2, 1, 2)
 
@@ -1384,8 +1380,7 @@ class MainWindow(QMainWindow):
         mapping_text.setHtml(
             "<table cellspacing='6'>"
             "<tr><td><b>왼쪽 스틱</b></td><td>Pan/Tilt 비례속도 Jog</td></tr>"
-            "<tr><td><b>D-pad ←/→</b></td><td>Pan 최대속도 -/+</td></tr>"
-            "<tr><td><b>D-pad ↓/↑</b></td><td>Tilt 최대속도 -/+</td></tr>"
+            "<tr><td><b>D-pad ←/→</b></td><td>Pan/Tilt 통합 속도 -/+</td></tr>"
             "<tr><td><b>A</b></td><td>즉시 STOP</td></tr>"
             "<tr><td><b>B</b></td><td>현재 Pan/Tilt 조회</td></tr>"
             "<tr><td><b>X</b></td><td>미사용</td></tr>"
@@ -1524,7 +1519,7 @@ class MainWindow(QMainWindow):
             '응답  {"id":"m1","ok":true,"result":{"accepted":true}}\n'
             '이벤트 {"event":"motion.completed","data":{"request_id":"m1",...}}\n\n'
             'Jog   {"id":"j1","command":"motion.jog",'
-            '"params":{"pan":"right","tilt":"stop","pan_level":3,"duration_ms":5000}}\n'
+            '"params":{"pan":"right","tilt":"stop","speed_level":3,"duration_ms":5000}}\n'
             'STOP  {"id":"s1","command":"motion.stop","params":{}}\n'
             '상태  {"id":"q1","command":"system.status","params":{}}'
         )
@@ -2802,7 +2797,9 @@ class MainWindow(QMainWindow):
     def _api_motion_jog(self, params: dict[str, Any], client_id: str) -> dict[str, Any]:
         self._api_require_connected()
         if "pan_speed" in params or "tilt_speed" in params:
-            raise ApiCommandError("INVALID_PARAMS", "pan_level/tilt_level (1~8)을 사용하세요.")
+            raise ApiCommandError(
+                "INVALID_PARAMS", "speed_level (1~8)을 사용하세요."
+            )
         if (
             self.api_motion_context is not None
             and self.api_motion_context["client_id"] != client_id
@@ -2824,12 +2821,18 @@ class MainWindow(QMainWindow):
             "down": TiltDirection.DOWN,
             "stop": TiltDirection.STOP,
         }[tilt_text]
-        pan_level = self._api_int(
-            params, "pan_level", self.pan_speed.value(), minimum=1, maximum=8
-        )
-        tilt_level = self._api_int(
-            params, "tilt_level", self.tilt_speed.value(), minimum=1, maximum=8
-        )
+        if "speed_level" in params:
+            speed_level = self._api_int(
+                params, "speed_level", self.manual_speed.value(), minimum=1, maximum=8
+            )
+            pan_level = tilt_level = speed_level
+        else:
+            pan_level = self._api_int(
+                params, "pan_level", self.manual_speed.value(), minimum=1, maximum=8
+            )
+            tilt_level = self._api_int(
+                params, "tilt_level", pan_level, minimum=1, maximum=8
+            )
         pan_speed = manual_speed_value(pan_level)
         tilt_speed = manual_speed_value(tilt_level)
         if pan is PanDirection.STOP and tilt is TiltDirection.STOP:
@@ -2860,6 +2863,7 @@ class MainWindow(QMainWindow):
             "unchanged": unchanged,
             "pan": pan_text,
             "tilt": tilt_text,
+            "speed_level": pan_level if pan_level == tilt_level else None,
             "pan_level": pan_level,
             "tilt_level": tilt_level,
             "pan_percent": manual_speed_percent(pan_level),
@@ -3475,37 +3479,22 @@ class MainWindow(QMainWindow):
         if gamepad_map.HAT_INDEX is not None:
             if current_hat == previous_hat:
                 return
-            pan_delta = gamepad_map.SPEED_STEP * current_hat[0]
-            tilt_delta = gamepad_map.SPEED_STEP * current_hat[1]
+            speed_delta = gamepad_map.SPEED_STEP * current_hat[0]
         else:
-            pan_delta = 0
-            tilt_delta = 0
+            speed_delta = 0
             if self._button_edge(
                 gamepad_map.DPAD_LEFT_BUTTON, current_buttons, previous_buttons
             ):
-                pan_delta -= gamepad_map.SPEED_STEP
+                speed_delta -= gamepad_map.SPEED_STEP
             if self._button_edge(
                 gamepad_map.DPAD_RIGHT_BUTTON, current_buttons, previous_buttons
             ):
-                pan_delta += gamepad_map.SPEED_STEP
-            if self._button_edge(
-                gamepad_map.DPAD_DOWN_BUTTON, current_buttons, previous_buttons
-            ):
-                tilt_delta -= gamepad_map.SPEED_STEP
-            if self._button_edge(
-                gamepad_map.DPAD_UP_BUTTON, current_buttons, previous_buttons
-            ):
-                tilt_delta += gamepad_map.SPEED_STEP
-        if pan_delta:
-            self.pan_speed.setValue(self.pan_speed.value() + pan_delta)
-        if tilt_delta:
-            self.tilt_speed.setValue(self.tilt_speed.value() + tilt_delta)
-        if pan_delta or tilt_delta:
+                speed_delta += gamepad_map.SPEED_STEP
+        if speed_delta:
+            self.manual_speed.setValue(self.manual_speed.value() + speed_delta)
             message = (
-                f"D-pad 수동 속도 · Pan {self.pan_speed.value()}단계 "
-                f"({manual_speed_percent(self.pan_speed.value())}%) / "
-                f"Tilt {self.tilt_speed.value()}단계 "
-                f"({manual_speed_percent(self.tilt_speed.value())}%)"
+                f"D-pad Pan/Tilt 통합 속도 · {self.manual_speed.value()}단계 "
+                f"({manual_speed_percent(self.manual_speed.value())}%)"
             )
             self.gamepad_status.setText(message)
             self._append_event("GAMEPAD", "", message)
@@ -4682,8 +4671,11 @@ class MainWindow(QMainWindow):
         self.completion_timeout.setValue(
             int(self.settings.value("monitor/completion_timeout", 30))
         )
-        self.pan_speed.setValue(int(self.settings.value("motion/pan_speed_level", 5)))
-        self.tilt_speed.setValue(int(self.settings.value("motion/tilt_speed_level", 5)))
+        saved_speed = self.settings.value(
+            "motion/manual_speed_level",
+            self.settings.value("motion/pan_speed_level", 5),
+        )
+        self.manual_speed.setValue(int(saved_speed))
         self.invert_pan.setChecked(
             str(self.settings.value("motion/invert_pan", "false")).lower() == "true"
         )
@@ -4713,8 +4705,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue(
             "monitor/completion_timeout", self.completion_timeout.value()
         )
-        self.settings.setValue("motion/pan_speed_level", self.pan_speed.value())
-        self.settings.setValue("motion/tilt_speed_level", self.tilt_speed.value())
+        self.settings.setValue("motion/manual_speed_level", self.manual_speed.value())
         self.settings.setValue("motion/invert_pan", self.invert_pan.isChecked())
         self.settings.setValue("motion/invert_tilt", self.invert_tilt.isChecked())
         self.settings.setValue("laser/aux_number", self.aux_number.value())

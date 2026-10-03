@@ -21,13 +21,14 @@ AUTO_PAN_SPEED = 0x3F
 AUTO_TILT_SPEED = MAX_SPEED
 MIN_MANUAL_SPEED_LEVEL = 1
 MAX_MANUAL_SPEED_LEVEL = 8
+MANUAL_SPEED_PERCENTS = (1, 3, 8, 15, 30, 50, 70, 100)
 
 
 def manual_speed_percent(level: int) -> int:
     """Return the displayed percentage for a manual speed level (1..8)."""
     if not MIN_MANUAL_SPEED_LEVEL <= level <= MAX_MANUAL_SPEED_LEVEL:
         raise ProtocolError("수동 속도 단계는 1~8 범위여야 합니다.")
-    return round(1 + (level - 1) * 99 / (MAX_MANUAL_SPEED_LEVEL - 1))
+    return MANUAL_SPEED_PERCENTS[level - 1]
 
 
 def manual_speed_value(level: int, maximum: int = MAX_SPEED) -> int:

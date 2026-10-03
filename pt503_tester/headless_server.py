@@ -1193,11 +1193,15 @@ class HeadlessController:
                 self._int(params, "baudrate", 9600, minimum=1200, maximum=115200)
             if command == "motion.jog":
                 if "pan_speed" in params or "tilt_speed" in params:
-                    raise HeadlessApiError("INVALID_PARAMS", "Use pan_level/tilt_level (1..8)")
+                    raise HeadlessApiError("INVALID_PARAMS", "Use speed_level (1..8)")
                 pan = {"left": PanDirection.LEFT, "right": PanDirection.RIGHT, "stop": PanDirection.STOP}[self._enum(params, "pan", {"left", "right", "stop"}, "stop")]
                 tilt = {"up": TiltDirection.UP, "down": TiltDirection.DOWN, "stop": TiltDirection.STOP}[self._enum(params, "tilt", {"up", "down", "stop"}, "stop")]
-                pl = self._int(params, "pan_level", 5, minimum=1, maximum=8)
-                tl = self._int(params, "tilt_level", 5, minimum=1, maximum=8)
+                if "speed_level" in params:
+                    level = self._int(params, "speed_level", 5, minimum=1, maximum=8)
+                    pl = tl = level
+                else:
+                    pl = self._int(params, "pan_level", 5, minimum=1, maximum=8)
+                    tl = self._int(params, "tilt_level", pl, minimum=1, maximum=8)
 
                 with self._lock:
                     if pan is PanDirection.STOP and tilt is TiltDirection.STOP:
@@ -1245,6 +1249,7 @@ class HeadlessController:
                     "rx": rx,
                     "pan_level": pl,
                     "tilt_level": tl,
+                    "speed_level": pl if pl == tl else None,
                     "resend_interval_ms": int(JOG_RESEND_INTERVAL_S * 1000),
                 }
             if command in {"motion.stop", "cruise.stop", "scan.stop"}:
@@ -1750,7 +1755,7 @@ pre{white-space:pre-wrap;background:#0c1119;border:1px solid #303b4d;border-radi
 <script>
 let recipes=[];let commands=[];const templates={
 'serial.auto_reconnect':{enabled:true,baudrates:[9600],first_address:1,last_address:16,timeout_ms:200,retry_interval_s:3,health_interval_s:2},
-'motion.jog':{pan:'right',tilt:'stop',pan_level:5,tilt_level:5},'motion.absolute':{pan:90,tilt:0},
+'motion.jog':{pan:'right',tilt:'stop',speed_level:5},'motion.absolute':{pan:90,tilt:0},
 'lens.motion':{action:'zoom_in'},'aux.set':{number:1,enabled:true},'preset.set':{number:1,confirm:true},'preset.call':{number:1},'preset.clear':{number:1,confirm:true},
 'scan.set_point':{point:'start'},'scan.start':{mode:'vendor'},'scan.stop':{mode:'vendor'},'scan.speed':{pan_speed:20,tilt_speed:8},'scan.speed_adjust':{direction:'faster'},
 'cruise.start':{track:1},'cruise.speed':{pan_speed:20,tilt_speed:8},'home.auto':{enabled:false},'home.after':{action:'cruise1'},
@@ -1766,7 +1771,7 @@ async function loadCommands(){const r=await cmdSilent('system.commands',{});comm
 async function loadRecipes(){const r=await cmdSilent('recipe.list',{});recipes=r.recipes;const cur=recipe.value;recipe.innerHTML=recipes.map(x=>`<option value="${x.id}">${x.name}</option>`).join('');if(cur)recipe.value=cur;renderPoints()}
 function selectedRecipe(){return recipes.find(r=>r.id===recipe.value)||recipes[0]}function renderPoints(){const r=selectedRecipe();points.innerHTML=(r?.points||[]).map(p=>`<tr><td>${p.order}</td><td>${p.name}</td><td>${p.pan}</td><td>${p.tilt}</td><td><button onclick="gotoPoint('${p.id}')">이동</button></td></tr>`).join('')}
 async function scan(){await cmd('serial.scan',{baudrates:[9600],first_address:1,last_address:1,timeout_ms:200})}async function connectSerial(){await cmd('serial.connect',{port:port.value,baudrate:+baud.value,address:+addr.value})}
-async function jog(e,p,t){try{e?.currentTarget?.setPointerCapture?.(e.pointerId)}catch(_e){}await cmd('motion.jog',{pan:p,tilt:t,pan_level:5,tilt_level:5})}async function stop(){await cmd('motion.stop',{})}async function gotoAbs(){await cmd('motion.absolute',{pan:+pan.value,tilt:+tilt.value})}
+async function jog(e,p,t){try{e?.currentTarget?.setPointerCapture?.(e.pointerId)}catch(_e){}await cmd('motion.jog',{pan:p,tilt:t,speed_level:5})}async function stop(){await cmd('motion.stop',{})}async function gotoAbs(){await cmd('motion.absolute',{pan:+pan.value,tilt:+tilt.value})}
 async function newRecipe(){const name=prompt('Recipe name','Recipe');if(name)await cmd('recipe.upsert',{name})}async function savePoint(){const r=selectedRecipe();if(!r)return;await cmd('point.upsert',{recipe_id:r.id,name:pname.value||'Point',pan:+ppan.value,tilt:+ptilt.value})}
 function loadTemplate(){apiParams.value=JSON.stringify(templates[apiCommand.value]||{},null,2)}
 async function runApiCommand(){let params={};try{params=JSON.parse(apiParams.value||'{}')}catch(e){log('ERR JSON params -> '+e.message);return}await cmd(apiCommand.value,params)}
@@ -2229,4 +2234,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -37,8 +37,7 @@
                                 id="actualTilt">—</output></label></div><output id="motionState">idle</output><button
                         data-command="position.get">위치 조회</button>
                     <h2>수동 조작</h2>
-                    <div class="fields"><label>Pan 속도<select id="panLevel"></select></label><label>Tilt 속도<select
-                                id="tiltLevel"></select></label></div>
+                    <div class="fields"><label>Pan/Tilt 통합 속도<select id="speedLevel"></select></label></div>
                     <div class="dial"><button class="up" data-pan="stop" data-tilt="up" title="위">▲</button><button
                             class="left" data-pan="left" data-tilt="stop" title="왼쪽">◀</button><button class="right"
                             data-pan="right" data-tilt="stop" title="오른쪽">▶</button><button class="down" data-pan="stop"
@@ -128,7 +127,7 @@
                 <aside class="drawing-calibration-panel">
                     <h2>도면 포인트 설정</h2>
                     <div id="drawingPointSets" class="cad-groups"></div>
-                    <p id="drawingCalibrationInfo">포인트 설정 파일을 선택하고 기준점 4~10개에 현재 Pan/Tilt를 적용하세요.</p>
+                    <p id="drawingCalibrationInfo">포인트 설정 파일을 선택하고 도면 영역을 넓게 둘러싸는 기준점 4~10개에 현재 Pan/Tilt를 적용하세요.</p>
                     <div class="toolbar">
                         <button id="applyCurrentDrawingPoint" type="button">현재값으로 적용</button>
                         <button id="toggleCalibrationPoint" type="button">캘리브레이션 포인트로 선택</button>

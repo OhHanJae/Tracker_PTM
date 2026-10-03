@@ -533,6 +533,7 @@ class DrawingStore:
         calibration = {
             "updated": now_iso(),
             "points_used": fit.points_used,
+            "model": "planar_projective" if fit.coordinate_axes is not None else "affine_3d",
             "rms_pan_error": round(fit.rms_pan_error, 4),
             "rms_tilt_error": round(fit.rms_tilt_error, 4),
             "origin": list(fit.origin),
