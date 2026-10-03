@@ -231,6 +231,8 @@ summary { color: #344150; cursor: pointer; font-weight: 600; }
 #commandDescription { min-height: 42px; color: var(--muted); line-height: 1.55; }
 #motionState, #laserState { display: inline-flex; padding: 5px 9px; color: #bf711e; background: #fff4e7; border-radius: 999px; font-size: 11px; font-weight: 700; }
 output { padding: 8px 0; }
+.calibration-motion-controls { align-items: center; padding: 8px 10px; background: var(--panel-soft); border: 1px solid var(--line); border-radius: 9px; }
+#drawingSpeedLevel { color: #2165c5; font-weight: 700; }
 .drawing-layout { display: grid; grid-template-columns: minmax(420px,2fr) minmax(380px,1fr); gap: 24px; }
 .drawing-calibration-layout { display: grid; grid-template-columns: minmax(520px,1.6fr) minmax(480px,1fr); gap: 18px; }
 .drawing-calibration-panel { min-width: 0; }

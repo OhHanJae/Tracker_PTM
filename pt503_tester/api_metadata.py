@@ -186,6 +186,7 @@ COMMAND_TEMPLATES: dict[str, dict[str, Any]] = {
     "drawing.point_delete": {"drawing_id": "", "point_id": ""},
     "drawing.point_reorder": {"drawing_id": "", "ordered_ids": []},
     "drawing.calibrate": {"drawing_id": ""},
+    "drawing.estimate_pan_tilt": {"drawing_id": "", "x": 0.0, "y": 0.0, "z": 0.0},
     "drawing.estimate_xy": {"drawing_id": "", "pan": 0.0, "tilt": 0.0},
     "drawing.estimate_recipe": {"drawing_id": "", "recipe_id": ""},
     "drawing.export_recipe": {"drawing_id": "", "recipe_id": ""},

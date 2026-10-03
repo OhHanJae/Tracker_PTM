@@ -184,6 +184,8 @@ class CalibrationFit:
     projective_coefficients: tuple[float, ...] | None = None
     pan_origin: float = 0.0
     tilt_origin: float = 0.0
+    pan_residual_coefficients: tuple[float, ...] = ()
+    tilt_residual_coefficients: tuple[float, ...] = ()
 
     def predict(self, point: DrawingPoint) -> tuple[float, float]:
         if self.coordinate_axes is not None and self.projective_coefficients is not None:
@@ -196,6 +198,15 @@ class CalibrationFit:
         return round(pan, 2), round(tilt, 2)
 
     def _predict_projective(self, point: DrawingPoint) -> tuple[float, float]:
+        pan, tilt, u, v = self._predict_projective_base(point)
+        pan_correction, tilt_correction = self._residual_correction(u, v)
+        pan = (pan + pan_correction) % 360.0
+        tilt = max(-60.0, min(60.0, tilt + tilt_correction))
+        return round(pan, 2), round(tilt, 2)
+
+    def _predict_projective_base(
+        self, point: DrawingPoint
+    ) -> tuple[float, float, float, float]:
         assert self.coordinate_axes is not None
         assert self.projective_coefficients is not None
         coordinates = point.position
@@ -214,7 +225,25 @@ class CalibrationFit:
         tilt = math.degrees(
             math.atan2(direction[1], math.hypot(direction[0], direction[2]))
         )
-        return round(pan, 2), round(max(-60.0, min(60.0, tilt)), 2)
+        return pan, tilt, u, v
+
+    def _residual_correction(self, u: float, v: float) -> tuple[float, float]:
+        if (
+            not self.pan_residual_coefficients
+            or not self.tilt_residual_coefficients
+        ):
+            return 0.0, 0.0
+        basis = (1.0, u, v, u * u, u * v, v * v)
+        return (
+            sum(
+                a * b
+                for a, b in zip(self.pan_residual_coefficients, basis, strict=True)
+            ),
+            sum(
+                a * b
+                for a, b in zip(self.tilt_residual_coefficients, basis, strict=True)
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -373,7 +402,60 @@ def _fit_planar_projective_calibration(
         pan_origin=pan_origin,
         tilt_origin=tilt_origin,
     )
-    predictions = [fit.predict(point) for point in points]
+    residual_samples = []
+    for point, pan, tilt in zip(points, pan_values, tilt_values, strict=True):
+        predicted_pan, predicted_tilt, u, v = fit._predict_projective_base(point)
+        residual_samples.append(
+            (
+                u,
+                v,
+                _angle_error(pan, predicted_pan),
+                tilt - predicted_tilt,
+            )
+        )
+    residual_rows = [
+        [
+            1.0,
+            sample[0],
+            sample[1],
+            sample[0] ** 2,
+            sample[0] * sample[1],
+            sample[1] ** 2,
+        ]
+        for sample in residual_samples
+    ]
+    pan_residual_coefficients = (
+        tuple(
+            _least_squares(
+                residual_rows, [sample[2] for sample in residual_samples]
+            )
+        )
+        if len(residual_samples) >= 6
+        else ()
+    )
+    tilt_residual_coefficients = (
+        tuple(
+            _least_squares(
+                residual_rows, [sample[3] for sample in residual_samples]
+            )
+        )
+        if len(residual_samples) >= 6
+        else ()
+    )
+    corrected_fit = CalibrationFit(
+        origin=origin,
+        scale=scale,
+        rms_pan_error=0.0,
+        rms_tilt_error=0.0,
+        points_used=len(points),
+        coordinate_axes=coordinate_axes,
+        projective_coefficients=coefficients,
+        pan_origin=pan_origin,
+        tilt_origin=tilt_origin,
+        pan_residual_coefficients=pan_residual_coefficients,
+        tilt_residual_coefficients=tilt_residual_coefficients,
+    )
+    predictions = [corrected_fit.predict(point) for point in points]
     return CalibrationFit(
         origin=origin,
         scale=scale,
@@ -388,6 +470,8 @@ def _fit_planar_projective_calibration(
         projective_coefficients=coefficients,
         pan_origin=pan_origin,
         tilt_origin=tilt_origin,
+        pan_residual_coefficients=pan_residual_coefficients,
+        tilt_residual_coefficients=tilt_residual_coefficients,
     )
 
 

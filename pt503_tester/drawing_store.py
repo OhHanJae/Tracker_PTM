@@ -505,11 +505,6 @@ class DrawingStore:
     def calibrate(self, drawing_id: str) -> dict[str, Any]:
         record = self._record(drawing_id)
         points = [DrawingPoint.from_dict(item) for item in self._points(record)]
-        taught_count = sum(
-            1 for point in points if point.calibration and point.has_pan_tilt
-        )
-        if taught_count > 10:
-            raise CalibrationError("캘리브레이션 기준점은 최대 10개까지 사용할 수 있습니다.")
         fit = fit_affine_calibration(points)
         updated: list[DrawingPoint] = []
         for point in points:
@@ -533,7 +528,7 @@ class DrawingStore:
         calibration = {
             "updated": now_iso(),
             "points_used": fit.points_used,
-            "model": "planar_projective" if fit.coordinate_axes is not None else "affine_3d",
+            "model": "planar_projective_residual" if fit.coordinate_axes is not None else "affine_3d",
             "rms_pan_error": round(fit.rms_pan_error, 4),
             "rms_tilt_error": round(fit.rms_tilt_error, 4),
             "origin": list(fit.origin),
@@ -564,6 +559,41 @@ class DrawingStore:
             "points_used": fit.points_used,
             "rms_x_error": round(fit.rms_x_error, 4),
             "rms_y_error": round(fit.rms_y_error, 4),
+        }
+
+    def estimate_pan_tilt(
+        self,
+        drawing_id: str,
+        x: float,
+        y: float,
+        z: float | None = None,
+    ) -> dict[str, Any]:
+        record = self._record(drawing_id)
+        drawing_points = [
+            DrawingPoint.from_dict(item) for item in self._points(record)
+        ]
+        fit = fit_affine_calibration(drawing_points)
+        taught = [
+            point
+            for point in drawing_points
+            if point.calibration and point.has_pan_tilt
+        ]
+        target_z = (
+            float(z)
+            if z is not None
+            else sum(point.z for point in taught) / len(taught)
+        )
+        pan, tilt = fit.predict(DrawingPoint.create((float(x), float(y), target_z)))
+        return {
+            "pan": pan,
+            "tilt": tilt,
+            "x": float(x),
+            "y": float(y),
+            "z": target_z,
+            "points_used": fit.points_used,
+            "model": "planar_projective_residual" if fit.coordinate_axes is not None else "affine_3d",
+            "rms_pan_error": round(fit.rms_pan_error, 4),
+            "rms_tilt_error": round(fit.rms_tilt_error, 4),
         }
 
     def estimate_recipe_coordinates(

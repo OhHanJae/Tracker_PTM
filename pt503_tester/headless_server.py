@@ -119,6 +119,7 @@ DRAWING_API_COMMANDS = {
     'drawing.point_delete',
     'drawing.point_reorder',
     'drawing.calibrate',
+    'drawing.estimate_pan_tilt',
     'drawing.estimate_xy',
     'drawing.estimate_recipe',
     'drawing.export_recipe',
@@ -1386,6 +1387,20 @@ class HeadlessController:
             return {"accepted": True, "drawing": drawing}
         if command == "drawing.calibrate":
             return {"drawing": self.drawing_store.calibrate(str(params["drawing_id"]))}
+        if command == "drawing.estimate_pan_tilt":
+            return self.drawing_store.estimate_pan_tilt(
+                str(params["drawing_id"]),
+                self._float(params, "x", minimum=-1e9, maximum=1e9),
+                self._float(params, "y", minimum=-1e9, maximum=1e9),
+                self._float(
+                    params,
+                    "z",
+                    None,
+                    minimum=-1e9,
+                    maximum=1e9,
+                    required=False,
+                ),
+            )
         if command == "drawing.estimate_xy":
             return self.drawing_store.estimate_xy(
                 str(params["drawing_id"]),

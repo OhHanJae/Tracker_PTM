@@ -677,8 +677,23 @@ for (const id of ['speedLevel'])
                 id,
                 $(id).value
             );
+            updateDrawingSpeedLevel();
         };
 }
+
+
+function updateDrawingSpeedLevel()
+{
+    const output = $('drawingSpeedLevel');
+    const level = Number($('speedLevel')?.value || 5);
+    if (output)
+    {
+        output.textContent = `수동 속도 ${level}단계 (${speedPercent[level - 1]}%)`;
+    }
+}
+
+
+updateDrawingSpeedLevel();
 
 
 // ============================================================================
@@ -4771,7 +4786,7 @@ function renderDrawingInfo()
             '도면 없음';
 
         $('drawingCalibrationInfo').textContent =
-            '좌클릭으로 포인트를 찍고, 최소 4개 포인트에 Pan/Tilt를 입력한 뒤 캘리브레이션하세요.';
+            '도면 영역을 넓게 둘러싸는 최소 4개 포인트에 현재 Pan/Tilt를 적용한 뒤 캘리브레이션하세요.';
 
         return;
     }
@@ -4787,7 +4802,9 @@ function renderDrawingInfo()
     $('drawingCalibrationInfo').textContent =
         calibration
             ? `캘리브레이션 완료: 기준점 ${calibration.points_used}개, Pan RMS ${calibration.rms_pan_error}°, Tilt RMS ${calibration.rms_tilt_error}°`
-            : '도면 영역을 넓게 둘러싸는 기준점 4~10개를 선택하고 현재 Pan/Tilt 값을 적용한 뒤 캘리브레이션하세요.';
+            : '도면 영역을 넓게 둘러싸는 기준점을 최소 4개 선택하세요. 6개 이상을 고르게 배치하면 국부 오차 보정이 더 정확해집니다.';
+    updateDrawingSpeedLevel();
+    updateDrawingMoveControls();
 }
 
 
@@ -4819,6 +4836,40 @@ function renderDrawingPoints()
                 detail: {point_id: point.id}
             }));
         };
+        const panInput = document.createElement('input');
+        panInput.type = 'number';
+        panInput.min = '0';
+        panInput.max = '359.99';
+        panInput.step = '.01';
+        panInput.placeholder = 'Pan';
+        panInput.value = point.pan ?? '';
+        const tiltInput = document.createElement('input');
+        tiltInput.type = 'number';
+        tiltInput.min = '-60';
+        tiltInput.max = '60';
+        tiltInput.step = '.01';
+        tiltInput.placeholder = 'Tilt';
+        tiltInput.value = point.tilt ?? '';
+        const selectInputPoint = event => {
+            event.stopPropagation();
+            selectedDrawingPointId = point.id;
+        };
+        panInput.onclick = selectInputPoint;
+        tiltInput.onclick = selectInputPoint;
+        const saveAngles = guarded(async event => {
+            event.stopPropagation();
+            const result = await cmd('drawing.point_upsert', {
+                drawing_id: activeDrawing.id,
+                point_id: point.id,
+                pan: nullableNumber(panInput.value),
+                tilt: nullableNumber(tiltInput.value)
+            }, true);
+            activeDrawing = result.drawing;
+            selectedDrawingPointId = point.id;
+            renderDrawingPanel();
+        });
+        panInput.onchange = saveAngles;
+        tiltInput.onchange = saveAngles;
         const values = [
             point.order,
             point.target_id || point.label,
@@ -4826,18 +4877,26 @@ function renderDrawingPoints()
             formatDrawingNumber(point.y),
             formatDrawingNumber(point.z),
             point.calibration ? '●' : '',
-            formatDrawingNumber(point.pan, 2),
-            formatDrawingNumber(point.tilt, 2)
+            panInput,
+            tiltInput
         ];
         for (const value of values)
         {
             const td = document.createElement('td');
-            td.textContent = value;
+            if (value instanceof HTMLElement)
+            {
+                td.append(value);
+            }
+            else
+            {
+                td.textContent = value;
+            }
             tr.append(td);
         }
         tbody.append(tr);
     }
     updateDrawingCalibrationButton();
+    updateDrawingMoveControls();
     return;
 
     for (const point of activeDrawing?.points || [])
@@ -5255,14 +5314,9 @@ async function applyCurrentDrawingPoint()
     {
         throw Error('도면 또는 목록에서 포인트를 선택하세요.');
     }
-    let pan = status.position?.pan;
-    let tilt = status.position?.tilt;
-    if (pan === null || pan === undefined || tilt === null || tilt === undefined)
-    {
-        const current = await cmd('position.get', {refresh: false}, true);
-        pan = current.pan;
-        tilt = current.tilt;
-    }
+    const current = await cmd('position.get', {refresh: true}, true);
+    const pan = current.pan;
+    const tilt = current.tilt;
     if (pan === null || pan === undefined || tilt === null || tilt === undefined)
     {
         throw Error('현재 Pan/Tilt 값을 먼저 조회하세요.');
@@ -5279,6 +5333,60 @@ async function applyCurrentDrawingPoint()
     $('notice').textContent =
         `${point.target_id || point.label}: Pan ${formatDrawingNumber(pan, 2)}°, Tilt ${formatDrawingNumber(tilt, 2)}° 적용`;
     renderDrawingPanel();
+}
+
+
+function updateDrawingMoveControls()
+{
+    const xyMode = $('drawingMoveXY');
+    const move = $('moveDrawingPoint');
+    if (!xyMode || !move)
+    {
+        return;
+    }
+    const calibrated = Boolean(activeDrawing?.calibration);
+    xyMode.disabled = !calibrated;
+    if (!calibrated)
+    {
+        xyMode.checked = false;
+    }
+    move.disabled = !selectedDrawingPoint();
+}
+
+
+async function moveSelectedDrawingPoint()
+{
+    const point = selectedDrawingPoint();
+    if (!point)
+    {
+        throw Error('이동할 도면 포인트를 선택하세요.');
+    }
+    let pan = point.pan;
+    let tilt = point.tilt;
+    let mode = 'Pan/Tilt';
+    if ($('drawingMoveXY').checked)
+    {
+        if (!activeDrawing.calibration)
+        {
+            throw Error('XY 좌표 이동은 캘리브레이션 완료 후에만 사용할 수 있습니다.');
+        }
+        const estimate = await cmd('drawing.estimate_pan_tilt', {
+            drawing_id: activeDrawing.id,
+            x: Number(point.x),
+            y: Number(point.y),
+            z: Number(point.z)
+        }, true);
+        pan = estimate.pan;
+        tilt = estimate.tilt;
+        mode = `XY (${formatDrawingNumber(point.x)}, ${formatDrawingNumber(point.y)})`;
+    }
+    if (pan === null || pan === undefined || tilt === null || tilt === undefined)
+    {
+        throw Error('해당 포인트에 Pan/Tilt 값이 없습니다. 현재값을 적용하거나 캘리브레이션하세요.');
+    }
+    await cmd('motion.absolute', {pan, tilt});
+    $('notice').textContent =
+        `${point.target_id || point.label}: ${mode} 이동 → Pan ${formatDrawingNumber(pan, 2)}°, Tilt ${formatDrawingNumber(tilt, 2)}°`;
 }
 
 
@@ -5487,6 +5595,12 @@ $('calibrateDrawing').onclick =
 $('applyCurrentDrawingPoint').onclick =
     guarded(
         applyCurrentDrawingPoint
+    );
+
+
+$('moveDrawingPoint').onclick =
+    guarded(
+        moveSelectedDrawingPoint
     );
 
 
@@ -6831,6 +6945,7 @@ function setSpeedStep(
         id,
         element.value
     );
+    updateDrawingSpeedLevel();
 }
 
 
