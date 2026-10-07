@@ -1057,6 +1057,21 @@ $('dialStop').onclick =
 // 웹 수동 Pan/Tilt 버튼
 // ============================================================================
 
+for (const [manualId, gamepadId] of [
+    ['manualInvertPan', 'padInvertX'],
+    ['manualInvertTilt', 'padInvertY']
+])
+{
+    const manualInput = $(manualId);
+    const gamepadInput = $(gamepadId);
+    manualInput.addEventListener('change', () => {
+        gamepadInput.checked = manualInput.checked;
+    });
+    gamepadInput.addEventListener('change', () => {
+        manualInput.checked = gamepadInput.checked;
+    });
+}
+
 document
     .querySelectorAll('[data-pan]')
     .forEach(element => {
@@ -7336,7 +7351,7 @@ setInterval(
 
         // 사용자 반전 설정
         if (
-            $('padInvertX').checked
+            $('manualInvertPan').checked
         )
         {
             rightX *= -1;
@@ -7344,7 +7359,7 @@ setInterval(
 
 
         if (
-            $('padInvertY').checked
+            $('manualInvertTilt').checked
         )
         {
             rightY *= -1;
