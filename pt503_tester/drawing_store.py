@@ -17,7 +17,6 @@ from .drawing_calibration import (
     fit_affine_calibration,
     fit_inverse_xy_calibration,
     load_model_file,
-    predict_product_pose,
 )
 from .recipe_store import RecipeStore, app_state_dir, now_iso
 
@@ -46,6 +45,9 @@ CAD_POINT_METADATA = (
     "possible_non_fastening_features",
     "equipment_region",
     "equipment_sequence",
+    # 최초 0°/0° 티칭값. 제품 자세를 여러 번 변경해도 이 기준값은 유지한다.
+    "calibration_pan",
+    "calibration_tilt",
 )
 
 
@@ -458,6 +460,8 @@ class DrawingStore:
             point["calibration_slot"] = sum(1 for item in points if item.get("calibration")) - 1
         if not point.get("calibration"):
             point["calibration_slot"] = None
+            point.pop("calibration_pan", None)
+            point.pop("calibration_tilt", None)
 
         updated_points = [_point_payload(item) for item in points]
         if record.get("source_kind") in CAD_PACKAGE_KINDS:
@@ -503,29 +507,201 @@ class DrawingStore:
         self.save()
         return self._public_record(record, include_points=True)
 
-    def calibrate(self, drawing_id: str) -> dict[str, Any]:
-        record = self._record(drawing_id)
-        points = [DrawingPoint.from_dict(item) for item in self._points(record)]
-        fit = fit_affine_calibration(points)
-        updated: list[DrawingPoint] = []
-        for point in points:
+    @staticmethod
+    def _pose_axis_name(axis: int) -> str:
+        return ("X", "Y", "Z")[axis]
+
+    def _all_product_points(self, record: dict[str, Any]) -> list[dict[str, Any]]:
+        if record.get("source_kind") in CAD_PACKAGE_KINDS:
+            groups = record.get("points_by_file") or {}
+            return [
+                point
+                for points in groups.values()
+                if isinstance(points, list)
+                for point in points
+                if isinstance(point, dict)
+            ]
+        return [point for point in self._points(record) if isinstance(point, dict)]
+
+    def _product_pose_frame(
+        self, record: dict[str, Any]
+    ) -> tuple[tuple[float, float, float], int, int, tuple[float, float, float]]:
+        points = self._all_product_points(record)
+        if not points:
+            raise CalibrationError("제품 자세를 계산할 도면 좌표가 없습니다.")
+
+        coordinates = [
+            (float(point.get("x", 0.0)), float(point.get("y", 0.0)), float(point.get("z", 0.0)))
+            for point in points
+        ]
+        minimums = tuple(min(position[axis] for position in coordinates) for axis in range(3))
+        maximums = tuple(max(position[axis] for position in coordinates) for axis in range(3))
+        center = tuple((minimums[axis] + maximums[axis]) / 2.0 for axis in range(3))
+        spans = tuple(maximums[axis] - minimums[axis] for axis in range(3))
+        axes = sorted(range(3), key=lambda axis: (-spans[axis], axis))
+        return center, axes[0], axes[1], spans
+
+    @staticmethod
+    def _rotate_product_position(
+        position: tuple[float, float, float],
+        center: tuple[float, float, float],
+        axis: int,
+        angle_deg: float,
+    ) -> tuple[float, float, float]:
+        if abs(angle_deg) < 1e-12:
+            return position
+
+        x = position[0] - center[0]
+        y = position[1] - center[1]
+        z = position[2] - center[2]
+        radians = math.radians(angle_deg)
+        cosine = math.cos(radians)
+        sine = math.sin(radians)
+
+        # 오른손 좌표계 기준 양(+)의 회전.
+        if axis == 0:      # X
+            y, z = y * cosine - z * sine, y * sine + z * cosine
+        elif axis == 1:    # Y
+            x, z = x * cosine + z * sine, -x * sine + z * cosine
+        else:              # Z
+            x, y = x * cosine - y * sine, x * sine + y * cosine
+
+        return center[0] + x, center[1] + y, center[2] + z
+
+    def _posed_product_position(
+        self,
+        record: dict[str, Any],
+        position: tuple[float, float, float],
+        product_rotation_deg: float,
+        product_tilt_deg: float,
+    ) -> tuple[tuple[float, float, float], dict[str, Any]]:
+        center, rotation_axis, tilt_axis, spans = self._product_pose_frame(record)
+        rotated = self._rotate_product_position(
+            position, center, rotation_axis, product_rotation_deg
+        )
+        posed = self._rotate_product_position(
+            rotated, center, tilt_axis, product_tilt_deg
+        )
+        return posed, {
+            "center": center,
+            "rotation_axis": rotation_axis,
+            "tilt_axis": tilt_axis,
+            "spans": spans,
+        }
+
+    def _reference_calibration_points(
+        self,
+        record: dict[str, Any],
+        *,
+        capture_zero_pose: bool,
+    ) -> list[DrawingPoint]:
+        raw_points = self._points(record)
+        previous_calibration = record.get("calibration") or {}
+        previous_rotation = float(previous_calibration.get("product_rotation_deg", 0.0) or 0.0)
+        previous_tilt = float(previous_calibration.get("product_tilt_deg", 0.0) or 0.0)
+        previous_is_zero = abs(previous_rotation) < 1e-9 and abs(previous_tilt) < 1e-9
+
+        reference_points: list[DrawingPoint] = []
+        for raw in raw_points:
+            point = DrawingPoint.from_dict(raw)
             if not point.calibration:
-                point.pan, point.tilt = fit.predict(point)
-            updated.append(point)
-        metadata_by_id = {str(item.get("id")): item for item in self._points(record)}
-        calibrated_points = []
-        for point in updated:
+                reference_points.append(point)
+                continue
+
+            if not point.has_pan_tilt:
+                reference_points.append(point)
+                continue
+
+            baseline_missing = (
+                raw.get("calibration_pan") is None
+                or raw.get("calibration_tilt") is None
+            )
+            if capture_zero_pose and (baseline_missing or previous_is_zero):
+                # 최초 0°/0° 캘리브레이션 또는 0°/0°에서 명시적으로 재티칭한 경우만
+                # 기준 Pan/Tilt를 갱신한다. 30° -> 0°처럼 자세만 되돌릴 때는
+                # 직전 자세에서 계산된 Pan/Tilt가 기준값을 덮어쓰지 않게 한다.
+                raw["calibration_pan"] = float(point.pan)
+                raw["calibration_tilt"] = float(point.tilt)
+            elif baseline_missing:
+                # 기존 버전에서 이미 0°/0° 캘리브레이션한 데이터는 자동 마이그레이션한다.
+                if previous_is_zero:
+                    raw["calibration_pan"] = float(point.pan)
+                    raw["calibration_tilt"] = float(point.tilt)
+                else:
+                    raise CalibrationError(
+                        "제품 각도 보정 기준값이 없습니다. 제품을 0°/0°로 놓고 기준점을 다시 캘리브레이션하세요."
+                    )
+
             payload = point.to_dict()
-            source = metadata_by_id.get(point.id, {})
+            payload["pan"] = raw.get("calibration_pan")
+            payload["tilt"] = raw.get("calibration_tilt")
+            reference_points.append(DrawingPoint.from_dict(payload))
+
+        return reference_points
+
+    def calibrate(
+        self,
+        drawing_id: str,
+        *,
+        product_rotation_deg: float = 0.0,
+        product_tilt_deg: float = 0.0,
+    ) -> dict[str, Any]:
+        record = self._record(drawing_id)
+        product_rotation_deg = float(product_rotation_deg)
+        product_tilt_deg = float(product_tilt_deg)
+        if (
+            not math.isfinite(product_rotation_deg)
+            or not math.isfinite(product_tilt_deg)
+            or abs(product_rotation_deg) > 360.0
+            or abs(product_tilt_deg) > 360.0
+        ):
+            raise ValueError("제품 회전/틸팅 각도는 -360..360도 범위여야 합니다.")
+
+        zero_pose = (
+            abs(product_rotation_deg) < 1e-9
+            and abs(product_tilt_deg) < 1e-9
+        )
+        reference_points = self._reference_calibration_points(
+            record,
+            capture_zero_pose=zero_pose,
+        )
+        fit = fit_affine_calibration(reference_points)
+        reference_by_id = {point.id: point for point in reference_points}
+        raw_points = self._points(record)
+
+        center, rotation_axis, tilt_axis, spans = self._product_pose_frame(record)
+        calibrated_points: list[dict[str, Any]] = []
+        for raw in raw_points:
+            point = DrawingPoint.from_dict(raw)
+            reference = reference_by_id.get(point.id, point)
+
+            if zero_pose and point.calibration and reference.has_pan_tilt:
+                pan = float(reference.pan)
+                tilt = float(reference.tilt)
+            else:
+                posed, _ = self._posed_product_position(
+                    record,
+                    point.position,
+                    product_rotation_deg,
+                    product_tilt_deg,
+                )
+                target = DrawingPoint.create(posed)
+                pan, tilt = fit.predict(target)
+
+            payload = point.to_dict()
+            payload["pan"] = round(float(pan) % 360.0, 2)
+            payload["tilt"] = round(max(-60.0, min(60.0, float(tilt))), 2)
             for key in CAD_POINT_METADATA:
-                if key in source:
-                    payload[key] = source[key]
+                if key in raw:
+                    payload[key] = raw[key]
             calibrated_points.append(payload)
+
         if record.get("source_kind") in CAD_PACKAGE_KINDS:
             selected_file = str(record.get("selected_point_file") or "")
             record.setdefault("points_by_file", {})[selected_file] = calibrated_points
         else:
             record["points"] = calibrated_points
+
         calibration = {
             "updated": now_iso(),
             "points_used": fit.points_used,
@@ -534,7 +710,16 @@ class DrawingStore:
             "rms_tilt_error": round(fit.rms_tilt_error, 4),
             "origin": list(fit.origin),
             "scale": fit.scale,
+            "product_rotation_deg": product_rotation_deg,
+            "product_tilt_deg": product_tilt_deg,
+            "product_center": [round(value, 6) for value in center],
+            "product_spans": [round(value, 6) for value in spans],
+            "rotation_axis": self._pose_axis_name(rotation_axis),
+            "tilt_axis": self._pose_axis_name(tilt_axis),
+            "reference_pose": {"rotation_deg": 0.0, "tilt_deg": 0.0},
         }
+        record["product_rotation_deg"] = product_rotation_deg
+        record["product_tilt_deg"] = product_tilt_deg
         record["calibration"] = calibration
         if record.get("source_kind") in CAD_PACKAGE_KINDS:
             record.setdefault("calibration_by_file", {})[
@@ -557,7 +742,11 @@ class DrawingStore:
                 point["tilt"] = None
                 point["calibration"] = False
                 point["calibration_slot"] = None
+                point.pop("calibration_pan", None)
+                point.pop("calibration_tilt", None)
         record["calibration"] = None
+        record["product_rotation_deg"] = 0.0
+        record["product_tilt_deg"] = 0.0
         if record.get("source_kind") in CAD_PACKAGE_KINDS:
             record["calibration_by_file"] = {}
         record["updated"] = now_iso()
@@ -590,13 +779,14 @@ class DrawingStore:
         z: float | None = None,
     ) -> dict[str, Any]:
         record = self._record(drawing_id)
-        drawing_points = [
-            DrawingPoint.from_dict(item) for item in self._points(record)
-        ]
-        fit = fit_affine_calibration(drawing_points)
+        reference_points = self._reference_calibration_points(
+            record,
+            capture_zero_pose=False,
+        )
+        fit = fit_affine_calibration(reference_points)
         taught = [
             point
-            for point in drawing_points
+            for point in reference_points
             if point.calibration and point.has_pan_tilt
         ]
         target_z = (
@@ -604,86 +794,30 @@ class DrawingStore:
             if z is not None
             else sum(point.z for point in taught) / len(taught)
         )
-        pan, tilt = fit.predict(DrawingPoint.create((float(x), float(y), target_z)))
+        product_rotation_deg = float(record.get("product_rotation_deg", 0.0) or 0.0)
+        product_tilt_deg = float(record.get("product_tilt_deg", 0.0) or 0.0)
+        posed, frame = self._posed_product_position(
+            record,
+            (float(x), float(y), target_z),
+            product_rotation_deg,
+            product_tilt_deg,
+        )
+        pan, tilt = fit.predict(DrawingPoint.create(posed))
         return {
             "pan": pan,
             "tilt": tilt,
             "x": float(x),
             "y": float(y),
             "z": target_z,
+            "posed_x": posed[0],
+            "posed_y": posed[1],
+            "posed_z": posed[2],
+            "product_rotation_deg": product_rotation_deg,
+            "product_tilt_deg": product_tilt_deg,
+            "rotation_axis": self._pose_axis_name(frame["rotation_axis"]),
+            "tilt_axis": self._pose_axis_name(frame["tilt_axis"]),
             "points_used": fit.points_used,
             "model": "planar_projective_residual" if fit.coordinate_axes is not None else "affine_3d",
-            "rms_pan_error": round(fit.rms_pan_error, 4),
-            "rms_tilt_error": round(fit.rms_tilt_error, 4),
-        }
-
-    def estimate_product_pose_point(
-        self,
-        source_note: str,
-        base_pan: float,
-        base_tilt: float,
-        rotation_deg: float,
-        tilt_deg: float,
-    ) -> dict[str, Any]:
-        source = source_note.splitlines()[0].split(" ", 2) if source_note else []
-        if len(source) != 3 or source[0] != "CAD_TARGET":
-            raise ValueError("제품 각도 보정에는 도면에서 저장한 레시피 포인트가 필요합니다.")
-        group_id, separator, target_id = source[2].partition(":")
-        if not separator or not target_id:
-            raise ValueError("레시피 포인트의 CAD 연결 정보가 올바르지 않습니다.")
-        record = self._record(source[1])
-        point_groups = record.get("points_by_file") or {"": self._points(record)}
-        all_points = [point for group in point_groups.values() for point in group]
-        group_points = next(
-            (
-                group for group in point_groups.values()
-                if any(
-                    str(point.get("group_id")) == group_id
-                    and str(point.get("target_id") or point.get("id")) == target_id
-                    for point in group
-                )
-            ),
-            None,
-        )
-        if group_points is None:
-            raise KeyError(f"CAD target is missing: {source[2]}")
-        target = next(
-            point for point in group_points
-            if str(point.get("group_id")) == group_id
-            and str(point.get("target_id") or point.get("id")) == target_id
-        )
-        if "z" not in target or not all_points:
-            raise ValueError("제품 각도 보정에 필요한 CAD XYZ가 없습니다.")
-        positions = [DrawingPoint.from_dict(point).position for point in all_points]
-        limits = [
-            (min(position[axis] for position in positions), max(position[axis] for position in positions))
-            for axis in range(3)
-        ]
-        pivot = tuple((minimum + maximum) / 2.0 for minimum, maximum in limits)
-        axes = sorted(range(3), key=lambda axis: limits[axis][1] - limits[axis][0], reverse=True)
-        fit = fit_affine_calibration([DrawingPoint.from_dict(point) for point in group_points])
-        position = DrawingPoint.from_dict(target).position
-        original_pan, original_tilt, _ = predict_product_pose(
-            fit, position, pivot, axes[0], axes[1], 0.0, 0.0
-        )
-        rotated_pan, rotated_tilt, transformed = predict_product_pose(
-            fit, position, pivot, axes[0], axes[1], rotation_deg, tilt_deg
-        )
-        pan_delta = (rotated_pan - original_pan + 180.0) % 360.0 - 180.0
-        pan = (float(base_pan) + pan_delta) % 360.0
-        tilt = float(base_tilt) + rotated_tilt - original_tilt
-        if not -60.0 <= tilt <= 60.0:
-            raise CalibrationError("보정된 Tilt가 장비 이동 범위를 벗어났습니다.")
-        return {
-            "pan": round(pan, 2),
-            "tilt": round(tilt, 2),
-            "drawing_id": source[1],
-            "target_id": target_id,
-            "rotation_axis": "XYZ"[axes[0]],
-            "tilt_axis": "XYZ"[axes[1]],
-            "pivot": [round(value, 3) for value in pivot],
-            "transformed_xyz": [round(value, 3) for value in transformed],
-            "z_certified": bool(target.get("contact_z_certified")),
             "rms_pan_error": round(fit.rms_pan_error, 4),
             "rms_tilt_error": round(fit.rms_tilt_error, 4),
         }
@@ -847,6 +981,8 @@ class DrawingStore:
             "web_vertex_count": int(record.get("web_vertex_count") or 0),
             "web_face_count": int(record.get("web_face_count") or 0),
             "calibration": record.get("calibration"),
+            "product_rotation_deg": float(record.get("product_rotation_deg", 0.0) or 0.0),
+            "product_tilt_deg": float(record.get("product_tilt_deg", 0.0) or 0.0),
             "point_count": len(record.get("points") or []),
             "deletable": record.get("source_kind") != "cad_package",
         }
@@ -968,6 +1104,8 @@ class DrawingStore:
                     "points_by_file": points_by_file,
                     "calibration_by_file": calibration_by_file,
                     "calibration": calibration_by_file.get(selected_file),
+                    "product_rotation_deg": float(old.get("product_rotation_deg", 0.0) or 0.0),
+                    "product_tilt_deg": float(old.get("product_tilt_deg", 0.0) or 0.0),
                     "warnings": [],
                 }
             )
@@ -1039,6 +1177,9 @@ def _cad_points(
         for metadata_key in CAD_POINT_METADATA:
             if metadata_key in source:
                 point[metadata_key] = source[metadata_key]
+        for calibration_key in ("calibration_pan", "calibration_tilt"):
+            if calibration_key in old:
+                point[calibration_key] = old[calibration_key]
         result.append(point)
     return result
 

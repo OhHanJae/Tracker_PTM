@@ -70,7 +70,7 @@
                     hidden></div>
             <p id="recipeDescription"></p>
             <output id="selectedPointStatus">선택 포인트: -</output>
-            <div class="toolbar"><button id="previewRecipePose" type="button">제품 자세 보정값 미리보기</button><output id="recipePoseStatus">이동 없이 선택 포인트의 보정값을 확인합니다.</output></div>
+            <div class="toolbar"><button id="previewRecipePose" type="button">저장된 Pan/Tilt 미리보기</button><output id="recipePoseStatus">이동 없이 선택 포인트의 저장된 Pan/Tilt를 확인합니다.</output></div>
             <div class="toolbar"><button id="runRecipeSequence" type="button">1번부터 순차 테스트</button><button
                     id="runRecipeRandom" type="button">랜덤 반복 시작</button><button id="stopRecipeTest" type="button"
                     class="danger" disabled>테스트 정지</button><output id="recipeTestStatus">대기</output></div>
@@ -107,8 +107,8 @@
                     <div class="dialog-heading"><h2>레시피 관리</h2><button id="closeRecipeManager" type="button">닫기</button></div>
                     <label>레시피 목록<select id="recipeManagerSelect" size="8" aria-label="관리할 레시피"></select></label>
                     <form id="recipeManagerForm">
-                        <div class="fields"><label>숫자 ID (INDEX)<input id="recipeManagerIndex" type="number" min="1" max="2147483647" step="1" required></label><label>이름<input id="recipeManagerName" required></label><label>설명<input id="recipeManagerDescription"></label><label>제품 회전각 °<input id="recipeProductRotation" type="number" min="-360" max="360" step="0.1" value="0" required></label><label>제품 틸팅각 °<input id="recipeProductTilt" type="number" min="-360" max="360" step="0.1" value="0" required></label></div>
-                        <p class="cad-warning">0°는 캘리브레이션 자세입니다. 제품 좌표의 중심에서 가장 긴 축으로 회전한 뒤 두 번째 긴 축으로 틸팅합니다. CAD의 Z가 미확인인 포인트는 보정 위치도 추정값입니다.</p>
+                        <div class="fields"><label>숫자 ID (INDEX)<input id="recipeManagerIndex" type="number" min="1" max="2147483647" step="1" required></label><label>이름<input id="recipeManagerName" required></label><label>설명<input id="recipeManagerDescription"></label><label>제품 회전각 ° (읽기전용)<input id="recipeProductRotation" type="number" min="-360" max="360" step="0.1" value="0" readonly></label><label>제품 틸팅각 ° (읽기전용)<input id="recipeProductTilt" type="number" min="-360" max="360" step="0.1" value="0" readonly></label></div>
+                        <p class="cad-warning">제품 각도는 레거시 데이터 확인용 읽기전용입니다. 실제 제품 회전/틸팅 자세는 도면 캘리브레이션 탭에서 설정합니다.</p>
                         <div class="toolbar"><button id="newManagedRecipe" type="button">새 레시피</button><button type="submit">저장</button><button id="deleteManagedRecipe" type="button" class="danger">삭제</button></div>
                     </form>
                 </div>
@@ -138,6 +138,12 @@
                     <h2>도면 포인트 설정</h2>
                     <div id="drawingPointSets" class="cad-groups"></div>
                     <p id="drawingCalibrationInfo">도면 영역을 넓게 둘러싸는 기준점을 최소 4개 지정하고 현재 Pan/Tilt를 적용하세요. 기준점을 더 추가하면 국부 오차도 보정합니다.</p>
+                    <div class="toolbar drawing-pose-controls">
+                        <label>제품 회전각 °<input id="drawingProductRotation" type="number" min="-360" max="360" step="0.1" value="0"></label>
+                        <label>제품 틸팅각 °<input id="drawingProductTilt" type="number" min="-360" max="360" step="0.1" value="0"></label>
+                        <output id="drawingPoseStatus">0° / 0° 기준 캘리브레이션</output>
+                    </div>
+                    <p class="cad-warning">먼저 제품 0°/0° 자세에서 기준점을 캘리브레이션하세요. 이후 제품 회전/틸팅 각도만 입력하고 캘리브레이션을 누르면 기준점 재티칭 없이 전체 Pan/Tilt를 다시 계산합니다.</p>
                     <div class="toolbar calibration-motion-controls">
                         <output id="drawingSpeedLevel">수동 속도 5단계 (30%)</output>
                         <label><input id="drawingMoveXY" type="checkbox">XY 좌표로 이동</label>

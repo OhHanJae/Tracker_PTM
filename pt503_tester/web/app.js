@@ -283,7 +283,9 @@ const fallbackTemplates = {
     },
 
     'drawing.calibrate': {
-        drawing_id: ''
+        drawing_id: '',
+        product_rotation_deg: 0,
+        product_tilt_deg: 0
     },
 
     'drawing.estimate_xy': {
@@ -2470,9 +2472,9 @@ $('recipeManagerForm').onsubmit = guarded(async event => {
         ...(managedRecipeId ? {recipe_id: managedRecipeId} : {}),
         index: Number($('recipeManagerIndex').value),
         name: $('recipeManagerName').value.trim(),
-        description: $('recipeManagerDescription').value.trim(),
-        product_rotation_deg: Number($('recipeProductRotation').value),
-        product_tilt_deg: Number($('recipeProductTilt').value)
+        description: $('recipeManagerDescription').value.trim()
+        // 제품 회전/틸팅 각도는 레시피에서 더 이상 변경하지 않는다.
+        // 실제 제품 자세는 도면 캘리브레이션에서 관리한다.
     });
     clearPoint();
     await loadRecipes(result.recipe.id);
@@ -3160,6 +3162,7 @@ async function loadDrawing(id = activeDrawingId())
         activeDrawing.points?.[0]?.id ||
         null;
 
+    loadDrawingPoseInputs();
     renderDrawingPanel();
     window.dispatchEvent(new CustomEvent('drawing-cad-load', {
         detail: {drawing: activeDrawing}
@@ -4780,6 +4783,49 @@ async function dropDrawingPoint(targetId)
 }
 
 
+function loadDrawingPoseInputs()
+{
+    if (!$('drawingProductRotation') || !$('drawingProductTilt'))
+    {
+        return;
+    }
+
+    const calibration = activeDrawing?.calibration || {};
+    const rotation = activeDrawing?.product_rotation_deg ?? calibration.product_rotation_deg ?? 0;
+    const tilt = activeDrawing?.product_tilt_deg ?? calibration.product_tilt_deg ?? 0;
+
+    $('drawingProductRotation').value = String(rotation);
+    $('drawingProductTilt').value = String(tilt);
+
+    if ($('drawingPoseStatus'))
+    {
+        $('drawingPoseStatus').textContent =
+            `제품 자세: 회전 ${Number(rotation).toFixed(1)}° / 틸팅 ${Number(tilt).toFixed(1)}°`;
+    }
+}
+
+
+function drawingPoseValues()
+{
+    const rotation = Number($('drawingProductRotation')?.value ?? 0);
+    const tilt = Number($('drawingProductTilt')?.value ?? 0);
+
+    if (!Number.isFinite(rotation) || !Number.isFinite(tilt))
+    {
+        throw Error('제품 회전/틸팅 각도는 숫자로 입력하세요.');
+    }
+    if (Math.abs(rotation) > 360 || Math.abs(tilt) > 360)
+    {
+        throw Error('제품 회전/틸팅 각도는 -360° ~ 360° 범위여야 합니다.');
+    }
+
+    return {
+        product_rotation_deg: rotation,
+        product_tilt_deg: tilt
+    };
+}
+
+
 function renderDrawingPanel()
 {
     renderDrawingInfo();
@@ -4860,8 +4906,9 @@ function renderDrawingInfo()
 
     $('drawingCalibrationInfo').textContent =
         calibration
-            ? `캘리브레이션 완료: 기준점 ${calibration.points_used}개, Pan RMS ${calibration.rms_pan_error}°, Tilt RMS ${calibration.rms_tilt_error}°`
-            : '도면 영역을 넓게 둘러싸는 기준점을 최소 4개 선택하세요. 6개 이상을 고르게 배치하면 국부 오차 보정이 더 정확해집니다.';
+            ? `캘리브레이션 완료: 제품 회전 ${Number(calibration.product_rotation_deg ?? 0).toFixed(1)}°, 틸팅 ${Number(calibration.product_tilt_deg ?? 0).toFixed(1)}° · 기준점 ${calibration.points_used}개 · Pan RMS ${calibration.rms_pan_error}°, Tilt RMS ${calibration.rms_tilt_error}°` +
+              (calibration.rotation_axis ? ` · 회전축 ${calibration.rotation_axis}, 틸팅축 ${calibration.tilt_axis}` : '')
+            : '도면 영역을 넓게 둘러싸는 기준점을 최소 4개 선택하세요. 먼저 제품 0°/0°에서 기준 캘리브레이션을 생성하세요.';
     updateDrawingSpeedLevel();
     updateDrawingMoveControls();
 }
@@ -5330,6 +5377,7 @@ async function calibrateDrawing()
         );
     }
 
+    const pose = drawingPoseValues();
 
     const result =
         await cmd(
@@ -5337,14 +5385,21 @@ async function calibrateDrawing()
 
             {
                 drawing_id:
-                    activeDrawing.id
+                    activeDrawing.id,
+                ...pose
             }
         );
 
     activeDrawing =
         result.drawing;
 
+    loadDrawingPoseInputs();
     renderDrawingPanel();
+
+    const calibration = activeDrawing.calibration || {};
+    $('notice').textContent =
+        `제품 자세 보정 완료: 회전 ${Number(calibration.product_rotation_deg ?? pose.product_rotation_deg).toFixed(1)}° / ` +
+        `틸팅 ${Number(calibration.product_tilt_deg ?? pose.product_tilt_deg).toFixed(1)}°`;
 }
 
 
@@ -5362,8 +5417,9 @@ async function resetDrawingCalibration()
         drawing_id: activeDrawing.id
     }, true);
     activeDrawing = result.drawing;
+    loadDrawingPoseInputs();
     renderDrawingPanel();
-    $('notice').textContent = '도면의 Pan/Tilt 값과 캘리브레이션 기준을 모두 지웠습니다.';
+    $('notice').textContent = '도면의 Pan/Tilt 값, 기준 캘리브레이션, 제품 자세 값을 모두 초기화했습니다.';
 }
 
 

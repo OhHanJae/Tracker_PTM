@@ -1065,18 +1065,10 @@ class HeadlessController:
     def _recipe_motion_target(
         self, recipe_id: str, point: RecipePoint
     ) -> tuple[dict[str, float], dict[str, Any] | None]:
-        recipe = self.recipe_store.get_recipe(recipe_id)
-        target = {"pan": point.pan, "tilt": point.tilt}
-        if recipe.product_rotation_deg == 0.0 and recipe.product_tilt_deg == 0.0:
-            return target, None
-        correction = self.drawing_store.estimate_product_pose_point(
-            point.note,
-            point.pan,
-            point.tilt,
-            recipe.product_rotation_deg,
-            recipe.product_tilt_deg,
-        )
-        return {"pan": correction["pan"], "tilt": correction["tilt"]}, correction
+        # 제품 자세 보정은 도면 캘리브레이션 단계에서 Pan/Tilt에 이미 반영된다.
+        # 레시피의 product_rotation_deg / product_tilt_deg는 레거시 확인용 읽기전용이다.
+        self.recipe_store.get_recipe(recipe_id)  # recipe_id 유효성 검증 유지
+        return {"pan": point.pan, "tilt": point.tilt}, None
 
     def command(
         self,
@@ -1449,7 +1441,27 @@ class HeadlessController:
             )
             return {"accepted": True, "drawing": drawing}
         if command == "drawing.calibrate":
-            return {"drawing": self.drawing_store.calibrate(str(params["drawing_id"]))}
+            return {
+                "drawing": self.drawing_store.calibrate(
+                    str(params["drawing_id"]),
+                    product_rotation_deg=self._float(
+                        params,
+                        "product_rotation_deg",
+                        0.0,
+                        minimum=-360.0,
+                        maximum=360.0,
+                        required=False,
+                    ) or 0.0,
+                    product_tilt_deg=self._float(
+                        params,
+                        "product_tilt_deg",
+                        0.0,
+                        minimum=-360.0,
+                        maximum=360.0,
+                        required=False,
+                    ) or 0.0,
+                )
+            }
         if command == "drawing.reset_calibration":
             return {"drawing": self.drawing_store.reset_calibration(str(params["drawing_id"]))}
         if command == "drawing.estimate_pan_tilt":
@@ -1727,14 +1739,8 @@ class HeadlessController:
                     self._int(params, "index", minimum=1, maximum=2_147_483_647)
                     if "index" in params else None
                 ),
-                product_rotation_deg=self._float(
-                    params, "product_rotation_deg", minimum=-360.0,
-                    maximum=360.0, required=False,
-                ),
-                product_tilt_deg=self._float(
-                    params, "product_tilt_deg", minimum=-360.0,
-                    maximum=360.0, required=False,
-                ),
+                # 제품 각도는 레시피에서 더 이상 수정하지 않는다.
+                # 기존 값은 호환성을 위해 RecipeStore에 그대로 보존된다.
             )
             return {"recipe": recipe.to_dict()}
         if command == "recipe.delete":

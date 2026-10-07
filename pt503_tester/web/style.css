@@ -233,6 +233,10 @@ summary { color: #344150; cursor: pointer; font-weight: 600; }
 output { padding: 8px 0; }
 .calibration-motion-controls { align-items: center; padding: 8px 10px; background: var(--panel-soft); border: 1px solid var(--line); border-radius: 9px; }
 #drawingSpeedLevel { color: #2165c5; font-weight: 700; }
+.drawing-pose-controls { align-items: flex-end; padding: 10px 12px; background: #f4f8ff; border: 1px solid #cfe0f6; border-radius: 9px; }
+.drawing-pose-controls label { flex-direction: column; align-items: flex-start; }
+#drawingPoseStatus { color: #2165c5; font-weight: 700; }
+#recipeProductRotation[readonly], #recipeProductTilt[readonly] { background: #f1f4f7; color: #687583; cursor: default; }
 .drawing-layout { display: grid; grid-template-columns: minmax(420px,2fr) minmax(380px,1fr); gap: 24px; }
 .drawing-calibration-layout { display: grid; grid-template-columns: minmax(520px,1.6fr) minmax(480px,1fr); gap: 18px; }
 .drawing-calibration-panel { min-width: 0; }

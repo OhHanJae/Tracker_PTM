@@ -7,7 +7,7 @@ import math
 import os
 import sys
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -108,6 +108,8 @@ class Recipe:
     description: str = ""
     product_rotation_deg: float = 0.0
     product_tilt_deg: float = 0.0
+    source_recipe_id: str = ""
+    pose_applied: bool = False
     points: list[RecipePoint] = field(default_factory=list)
     updated: str = field(default_factory=now_iso)
 
@@ -130,6 +132,8 @@ class Recipe:
             description=str(data.get("description", "")),
             product_rotation_deg=float(data.get("product_rotation_deg", 0.0)),
             product_tilt_deg=float(data.get("product_tilt_deg", 0.0)),
+            source_recipe_id=str(data.get("source_recipe_id") or ""),
+            pose_applied=bool(data.get("pose_applied", False)),
             points=points,
             updated=str(data.get("updated") or now_iso()),
         )
@@ -150,6 +154,8 @@ class Recipe:
             "description": self.description,
             "product_rotation_deg": self.product_rotation_deg,
             "product_tilt_deg": self.product_tilt_deg,
+            "source_recipe_id": self.source_recipe_id,
+            "pose_applied": self.pose_applied,
             "updated": self.updated,
             "points": [point.to_dict() for point in self.points],
         }
@@ -292,6 +298,61 @@ class RecipeStore:
         self.save()
         return recipe
 
+    def create_pose_recipe(
+        self,
+        source_recipe_id: str | int,
+        *,
+        name: str,
+        description: str,
+        index: int | None,
+        product_rotation_deg: float,
+        product_tilt_deg: float,
+        targets: dict[str, tuple[float, float]],
+    ) -> Recipe:
+        source = self.get_recipe(source_recipe_id)
+        if source.pose_applied:
+            raise ValueError("보정된 레시피는 기준 레시피로 사용할 수 없습니다.")
+        if not source.points:
+            raise ValueError("기준 레시피에 포인트가 없습니다.")
+        if not name.strip():
+            raise ValueError("새 레시피 이름이 필요합니다.")
+        if index is None:
+            index = self._next_index()
+        if isinstance(index, bool) or not isinstance(index, int) or index < 1:
+            raise ValueError("recipe index must be a positive integer")
+        if any(recipe.index == index for recipe in self._recipes):
+            raise ValueError(f"recipe index is already in use: {index}")
+        if set(targets) != {point.id for point in source.points}:
+            raise ValueError("모든 기준 포인트의 보정값이 필요합니다.")
+        if any(
+            not math.isfinite(float(angle)) or abs(float(angle)) > 360.0
+            for angle in (product_rotation_deg, product_tilt_deg)
+        ):
+            raise ValueError("제품 각도는 -360..360도 범위여야 합니다.")
+        recipe = Recipe.create(name.strip(), description, index)
+        recipe.product_rotation_deg = float(product_rotation_deg)
+        recipe.product_tilt_deg = float(product_tilt_deg)
+        recipe.source_recipe_id = source.id
+        recipe.pose_applied = True
+        for point in source.points:
+            pan, tilt = targets[point.id]
+            if not math.isfinite(pan) or not math.isfinite(tilt) or not -60.0 <= tilt <= 60.0:
+                raise ValueError(f"유효하지 않은 보정값: {point.name}")
+            recipe.points.append(replace(
+                point,
+                id=str(uuid.uuid4()),
+                pan=round(pan % 360.0, 2),
+                tilt=round(tilt, 2),
+                updated=now_iso(),
+            ))
+        self._recipes.append(recipe)
+        try:
+            self.save()
+        except OSError:
+            self._recipes.pop()
+            raise
+        return recipe
+
     def delete_recipe(self, recipe_id: str | int) -> None:
         if len(self._recipes) <= 1:
             raise ValueError("at least one recipe is required")
@@ -419,6 +480,10 @@ class RecipeStore:
             for key in ("product_rotation_deg", "product_tilt_deg"):
                 if key in data:
                     cls._finite_number(data, key, f"recipe {recipe_index}", minimum=-360.0, maximum=360.0)
+            if "source_recipe_id" in data and not isinstance(data["source_recipe_id"], str):
+                raise ValueError(f"recipe {recipe_index}.source_recipe_id must be a string")
+            if "pose_applied" in data and not isinstance(data["pose_applied"], bool):
+                raise ValueError(f"recipe {recipe_index}.pose_applied must be boolean")
             points_data = data.get("points")
             if not isinstance(points_data, list):
                 raise ValueError(f"recipe {recipe_index}.points must be an array")
