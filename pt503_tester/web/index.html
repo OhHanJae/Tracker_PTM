@@ -65,13 +65,12 @@
             </div>
         </section>
         <section id="recipes" class="page" hidden>
-            <div class="toolbar"><select id="recipeSelect" aria-label="레시피"></select><button id="newRecipe">레시피
-                    추가</button><button id="editRecipe">레시피 수정</button><button id="deleteRecipe" class="danger">레시피
-                    삭제</button><button id="exportRecipe" type="button">파일 내보내기</button><button id="importRecipe"
+            <div class="toolbar"><select id="recipeSelect" aria-label="레시피"></select><button id="manageRecipes" type="button">레시피 관리</button><button id="exportRecipe" type="button">파일 내보내기</button><button id="importRecipe"
                     type="button">파일 불러오기</button><input id="recipeFile" type="file" accept="application/json,.json"
                     hidden></div>
             <p id="recipeDescription"></p>
             <output id="selectedPointStatus">선택 포인트: -</output>
+            <div class="toolbar"><button id="previewRecipePose" type="button">제품 자세 보정값 미리보기</button><output id="recipePoseStatus">이동 없이 선택 포인트의 보정값을 확인합니다.</output></div>
             <div class="toolbar"><button id="runRecipeSequence" type="button">1번부터 순차 테스트</button><button
                     id="runRecipeRandom" type="button">랜덤 반복 시작</button><button id="stopRecipeTest" type="button"
                     class="danger" disabled>테스트 정지</button><output id="recipeTestStatus">대기</output></div>
@@ -103,6 +102,17 @@
                 <div class="toolbar"><button>저장</button><button type="button" id="capture">현재 위치 가져오기</button><button
                         type="button" id="newPoint">새 포인트</button></div>
             </form>
+            <dialog id="recipeManagerDialog">
+                <div class="recipe-manager-form">
+                    <div class="dialog-heading"><h2>레시피 관리</h2><button id="closeRecipeManager" type="button">닫기</button></div>
+                    <label>레시피 목록<select id="recipeManagerSelect" size="8" aria-label="관리할 레시피"></select></label>
+                    <form id="recipeManagerForm">
+                        <div class="fields"><label>숫자 ID (INDEX)<input id="recipeManagerIndex" type="number" min="1" max="2147483647" step="1" required></label><label>이름<input id="recipeManagerName" required></label><label>설명<input id="recipeManagerDescription"></label><label>제품 회전각 °<input id="recipeProductRotation" type="number" min="-360" max="360" step="0.1" value="0" required></label><label>제품 틸팅각 °<input id="recipeProductTilt" type="number" min="-360" max="360" step="0.1" value="0" required></label></div>
+                        <p class="cad-warning">0°는 캘리브레이션 자세입니다. 제품 좌표의 중심에서 가장 긴 축으로 회전한 뒤 두 번째 긴 축으로 틸팅합니다. CAD의 Z가 미확인인 포인트는 보정 위치도 추정값입니다.</p>
+                        <div class="toolbar"><button id="newManagedRecipe" type="button">새 레시피</button><button type="submit">저장</button><button id="deleteManagedRecipe" type="button" class="danger">삭제</button></div>
+                    </form>
+                </div>
+            </dialog>
         </section>
         <section id="drawings" class="page" hidden>
             <div class="toolbar">

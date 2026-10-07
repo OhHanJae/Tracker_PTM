@@ -316,6 +316,10 @@ output { padding: 8px 0; }
 .cad-warning { padding: 10px; color: #915a15; background: #fff6e8; border-left: 3px solid #f0a63c; }
 .recipe-dialog-form { display: grid; min-width: min(440px,80vw); gap: 14px; }
 .recipe-dialog-form label { display: grid; gap: 6px; }
+.recipe-manager-form { display: grid; width: min(620px, 86vw); max-height: 82vh; gap: 12px; overflow: auto; }
+.recipe-manager-form label { display: grid; gap: 6px; }
+.recipe-manager-form form { display: grid; gap: 12px; }
+.recipe-manager-form select { width: 100%; }
 .drawing-manager-form { display: grid; width: min(760px, 86vw); max-height: 82vh; gap: 12px; overflow: auto; }
 .dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .dialog-heading h2, .dialog-heading p { margin: 0 0 6px; }

@@ -369,6 +369,84 @@ def fit_affine_calibration(points: list[DrawingPoint]) -> CalibrationFit:
     )
 
 
+def predict_product_pose(
+    fit: CalibrationFit,
+    position: Vector3,
+    pivot: Vector3,
+    rotation_axis: int,
+    tilt_axis: int,
+    rotation_deg: float,
+    tilt_deg: float,
+) -> tuple[float, float, Vector3]:
+    """Project a rigidly rotated CAD point through the taught motor rays."""
+    if fit.coordinate_axes is None or fit.projective_coefficients is None:
+        raise CalibrationError("제품 자세 보정에는 평면 기준점 캘리브레이션이 필요합니다.")
+
+    axes = fit.coordinate_axes
+    normal_axis = 3 - axes[0] - axes[1]
+    h = fit.projective_coefficients
+    columns = (
+        (h[0] / fit.scale, h[3] / fit.scale, h[6] / fit.scale),
+        (h[1] / fit.scale, h[4] / fit.scale, h[7] / fit.scale),
+    )
+    lengths = [math.sqrt(sum(value * value for value in column)) for column in columns]
+    if min(lengths) < 1e-12:
+        raise CalibrationError("제품 자세 보정에 필요한 거리 척도를 계산할 수 없습니다.")
+    distance_scale = 2.0 / sum(lengths)
+    first = tuple(value / lengths[0] for value in columns[0])
+    projection = sum(a * b for a, b in zip(first, columns[1], strict=True))
+    second_raw = tuple(value - projection * first[index] for index, value in enumerate(columns[1]))
+    second_length = math.sqrt(sum(value * value for value in second_raw))
+    if second_length < 1e-12:
+        raise CalibrationError("제품 자세 보정 축을 계산할 수 없습니다.")
+    second = tuple(value / second_length for value in second_raw)
+    cross = (
+        first[1] * second[2] - first[2] * second[1],
+        first[2] * second[0] - first[0] * second[2],
+        first[0] * second[1] - first[1] * second[0],
+    )
+    sign = (
+        1 if (axes[0], axes[1], normal_axis) in ((0, 1, 2), (1, 2, 0), (2, 0, 1))
+        else -1
+    )
+    basis: list[Vector3] = [(0.0, 0.0, 0.0)] * 3
+    basis[axes[0]] = first
+    basis[axes[1]] = second
+    basis[normal_axis] = tuple(sign * value for value in cross)
+
+    at_origin = (distance_scale * h[2], distance_scale * h[5], distance_scale)
+    at_pivot = tuple(
+        at_origin[component]
+        + sum(basis[axis][component] * (pivot[axis] - fit.origin[axis]) for axis in range(3))
+        for component in range(3)
+    )
+    offset = [position[axis] - pivot[axis] for axis in range(3)]
+    for axis, degrees in ((rotation_axis, rotation_deg), (tilt_axis, tilt_deg)):
+        radians = math.radians(degrees)
+        cosine, sine = math.cos(radians), math.sin(radians)
+        other = (axis + 1) % 3
+        last = (axis + 2) % 3
+        offset[other], offset[last] = (
+            offset[other] * cosine - offset[last] * sine,
+            offset[other] * sine + offset[last] * cosine,
+        )
+    transformed = tuple(pivot[axis] + offset[axis] for axis in range(3))
+    local = tuple(
+        at_pivot[component] + sum(basis[axis][component] * offset[axis] for axis in range(3))
+        for component in range(3)
+    )
+    if local[2] <= 1e-6:
+        raise CalibrationError("보정된 포인트가 모터 뒤쪽에 있습니다.")
+    direction = _motor_direction_from_image(
+        local[0] / local[2], local[1] / local[2], fit.pan_origin, fit.tilt_origin
+    )
+    pan = math.degrees(math.atan2(direction[0], direction[2])) % 360.0
+    tilt = math.degrees(math.atan2(direction[1], math.hypot(direction[0], direction[2])))
+    if not -60.0 <= tilt <= 60.0:
+        raise CalibrationError("보정된 Tilt가 장비 이동 범위를 벗어났습니다.")
+    return round(pan, 2), round(tilt, 2), transformed  # type: ignore[return-value]
+
+
 def _fit_planar_projective_calibration(
     points: list[DrawingPoint],
     origin: Vector3,

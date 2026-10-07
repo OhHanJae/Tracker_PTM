@@ -104,13 +104,16 @@ class RecipePoint:
 class Recipe:
     id: str
     name: str
+    index: int = 0
     description: str = ""
+    product_rotation_deg: float = 0.0
+    product_tilt_deg: float = 0.0
     points: list[RecipePoint] = field(default_factory=list)
     updated: str = field(default_factory=now_iso)
 
     @classmethod
-    def create(cls, name: str, description: str = "") -> "Recipe":
-        return cls(id=str(uuid.uuid4()), name=name, description=description)
+    def create(cls, name: str, description: str = "", index: int = 0) -> "Recipe":
+        return cls(id=str(uuid.uuid4()), name=name, index=index, description=description)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Recipe":
@@ -123,7 +126,10 @@ class Recipe:
         recipe = cls(
             id=str(data.get("id") or uuid.uuid4()),
             name=str(data.get("name") or "Recipe"),
+            index=int(data.get("index") or 0),
             description=str(data.get("description", "")),
+            product_rotation_deg=float(data.get("product_rotation_deg", 0.0)),
+            product_tilt_deg=float(data.get("product_tilt_deg", 0.0)),
             points=points,
             updated=str(data.get("updated") or now_iso()),
         )
@@ -139,8 +145,11 @@ class Recipe:
         self.normalize_orders()
         return {
             "id": self.id,
+            "index": self.index,
             "name": self.name,
             "description": self.description,
+            "product_rotation_deg": self.product_rotation_deg,
+            "product_tilt_deg": self.product_tilt_deg,
             "updated": self.updated,
             "points": [point.to_dict() for point in self.points],
         }
@@ -161,20 +170,27 @@ class RecipeStore:
 
     def load(self) -> None:
         if not self.path.exists():
-            self._recipes = [Recipe.create("Default")]
+            self._recipes = [Recipe.create("Default", index=1)]
             self.save()
             return
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            self._recipes = [Recipe.create("Default")]
+            self._recipes = [Recipe.create("Default", index=1)]
             return
         recipes_data = data.get("recipes", []) if isinstance(data, dict) else []
         self._recipes = [
             Recipe.from_dict(item) for item in recipes_data if isinstance(item, dict)
         ]
         if not self._recipes:
-            self._recipes = [Recipe.create("Default")]
+            self._recipes = [Recipe.create("Default", index=1)]
+        seen_indices: set[int] = set()
+        for recipe in self._recipes:
+            if recipe.index < 1 or recipe.index in seen_indices:
+                recipe.index = 0
+            else:
+                seen_indices.add(recipe.index)
+        self._assign_missing_indices(self._recipes)
 
     def save(self) -> None:
         payload = {
@@ -203,7 +219,14 @@ class RecipeStore:
         imported = self._validated_document(payload)
         imported_ids = {recipe.id for recipe in imported}
         merged = [recipe for recipe in self._recipes if recipe.id not in imported_ids]
+        occupied = {recipe.index for recipe in merged}
+        for recipe in imported:
+            if recipe.index in occupied:
+                recipe.index = 0
+            elif recipe.index:
+                occupied.add(recipe.index)
         merged.extend(imported)
+        self._assign_missing_indices(merged)
         self._validate_unique_ids(merged)
 
         previous = self._recipes
@@ -216,39 +239,88 @@ class RecipeStore:
         return [recipe.to_dict() for recipe in imported]
 
     def list_recipes(self) -> list[dict[str, Any]]:
-        return [recipe.to_dict() for recipe in self._recipes]
+        return [recipe.to_dict() for recipe in sorted(self._recipes, key=lambda item: item.index)]
 
-    def get_recipe(self, recipe_id: str | None = None) -> Recipe:
+    def get_recipe(self, recipe_id: str | int | None = None) -> Recipe:
         if recipe_id:
+            key = str(recipe_id)
             for recipe in self._recipes:
-                if recipe.id == recipe_id:
+                if recipe.id == key:
                     return recipe
+            if key.isdecimal():
+                for recipe in self._recipes:
+                    if recipe.index == int(key):
+                        return recipe
             raise KeyError(f"unknown recipe: {recipe_id}")
         return self._recipes[0]
 
     def upsert_recipe(
         self,
         *,
-        recipe_id: str | None = None,
+        recipe_id: str | int | None = None,
         name: str,
         description: str = "",
+        index: int | None = None,
+        product_rotation_deg: float | None = None,
+        product_tilt_deg: float | None = None,
     ) -> Recipe:
-        if recipe_id:
-            recipe = self.get_recipe(recipe_id)
+        existing = self.get_recipe(recipe_id) if recipe_id else None
+        if index is not None:
+            if isinstance(index, bool) or not isinstance(index, int) or index < 1:
+                raise ValueError("recipe index must be a positive integer")
+            if any(item.index == index and item is not existing for item in self._recipes):
+                raise ValueError(f"recipe index is already in use: {index}")
+        for label, angle in (("product_rotation_deg", product_rotation_deg), ("product_tilt_deg", product_tilt_deg)):
+            if angle is not None and (not math.isfinite(float(angle)) or abs(float(angle)) > 360.0):
+                raise ValueError(f"{label} must be between -360 and 360 degrees")
+        if existing is not None:
+            recipe = existing
             recipe.name = name
             recipe.description = description
+            if index is not None:
+                recipe.index = index
+            if product_rotation_deg is not None:
+                recipe.product_rotation_deg = float(product_rotation_deg)
+            if product_tilt_deg is not None:
+                recipe.product_tilt_deg = float(product_tilt_deg)
             recipe.updated = now_iso()
         else:
-            recipe = Recipe.create(name, description)
+            recipe = Recipe.create(name, description, index or self._next_index())
+            recipe.product_rotation_deg = float(product_rotation_deg or 0.0)
+            recipe.product_tilt_deg = float(product_tilt_deg or 0.0)
             self._recipes.append(recipe)
         self.save()
         return recipe
 
-    def delete_recipe(self, recipe_id: str) -> None:
+    def delete_recipe(self, recipe_id: str | int) -> None:
         if len(self._recipes) <= 1:
             raise ValueError("at least one recipe is required")
-        self._recipes = [recipe for recipe in self._recipes if recipe.id != recipe_id]
+        target_id = self.get_recipe(recipe_id).id
+        self._recipes = [recipe for recipe in self._recipes if recipe.id != target_id]
         self.save()
+
+    def _next_index(self) -> int:
+        used = {recipe.index for recipe in self._recipes}
+        index = 1
+        while index in used:
+            index += 1
+        return index
+
+    @staticmethod
+    def _assign_missing_indices(recipes: list[Recipe]) -> None:
+        used: set[int] = set()
+        for recipe in recipes:
+            if recipe.index < 0 or recipe.index in used:
+                raise ValueError(f"duplicate or invalid recipe index: {recipe.index}")
+            if recipe.index:
+                used.add(recipe.index)
+        for recipe in recipes:
+            if not recipe.index:
+                index = 1
+                while index in used:
+                    index += 1
+                recipe.index = index
+                used.add(index)
 
     def upsert_point(
         self,
@@ -340,8 +412,13 @@ class RecipeStore:
                 raise ValueError(f"recipe {recipe_index} must be an object")
             cls._required_string(data, "id", f"recipe {recipe_index}")
             cls._required_string(data, "name", f"recipe {recipe_index}")
+            if "index" in data:
+                cls._integer(data, "index", f"recipe {recipe_index}", minimum=1)
             if "description" in data and not isinstance(data["description"], str):
                 raise ValueError(f"recipe {recipe_index}.description must be a string")
+            for key in ("product_rotation_deg", "product_tilt_deg"):
+                if key in data:
+                    cls._finite_number(data, key, f"recipe {recipe_index}", minimum=-360.0, maximum=360.0)
             points_data = data.get("points")
             if not isinstance(points_data, list):
                 raise ValueError(f"recipe {recipe_index}.points must be an array")
@@ -372,11 +449,16 @@ class RecipeStore:
     @staticmethod
     def _validate_unique_ids(recipes: list[Recipe]) -> None:
         recipe_ids: set[str] = set()
+        recipe_indices: set[int] = set()
         point_ids: set[str] = set()
         for recipe in recipes:
             if recipe.id in recipe_ids:
                 raise ValueError(f"duplicate recipe id: {recipe.id}")
             recipe_ids.add(recipe.id)
+            if recipe.index and recipe.index in recipe_indices:
+                raise ValueError(f"duplicate recipe index: {recipe.index}")
+            if recipe.index:
+                recipe_indices.add(recipe.index)
             for point in recipe.points:
                 if point.id in point_ids:
                     raise ValueError(f"duplicate point id: {point.id}")

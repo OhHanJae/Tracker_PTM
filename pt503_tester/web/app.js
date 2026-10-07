@@ -1480,7 +1480,7 @@ async function loadRecipes(select)
         ...recipes.map(
             recipe =>
                 new Option(
-                    recipe.name,
+                    `ID ${recipe.index} · ${recipe.name}`,
                     recipe.id
                 )
         )
@@ -1818,6 +1818,11 @@ async function runRecipePointTest(mode)
         );
     }
 
+    if (recipe.product_rotation_deg || recipe.product_tilt_deg)
+    {
+        await cmd('recipe.pose_preview', {recipe_id: recipe.id}, true);
+    }
+
 
     recipeTestRunning =
         true;
@@ -2015,9 +2020,10 @@ function renderPoints()
     requestRecipeEstimates();
 
 
-    $('recipeDescription').textContent =
-        recipe?.description
-        || '';
+    $('recipeDescription').textContent = recipe
+        ? `ID ${recipe.index} · 제품 회전 ${recipe.product_rotation_deg || 0}° / 틸팅 ${recipe.product_tilt_deg || 0}°${recipe.description ? ` · ${recipe.description}` : ''}`
+        : '';
+    $('recipePoseStatus').textContent = '이동 없이 선택 포인트의 보정값을 확인합니다.';
 
 
     selectedPoint();
@@ -2403,138 +2409,104 @@ window.addEventListener(
 );
 
 
-$('newRecipe').onclick =
-    guarded(
-        async () => {
+let managedRecipeId = null;
 
-            const name =
-                prompt(
-                    '레시피 이름'
-                );
+function nextRecipeIndex()
+{
+    const used = new Set(recipes.map(recipe => recipe.index));
+    let index = 1;
+    while (used.has(index))
+    {
+        index += 1;
+    }
+    return index;
+}
 
-
-            if (!name)
-            {
-                return;
-            }
-
-
-            const result =
-                await cmd(
-                    'recipe.upsert',
-
-                    {
-                        name
-                    }
-                );
-
-
-            clearPoint();
-
-
-            await loadRecipes(
-                result.recipe.id
-            );
-        }
+function renderRecipeManager(recipeId = managedRecipeId)
+{
+    const list = $('recipeManagerSelect');
+    list.replaceChildren(
+        ...recipes.map(recipe =>
+            new Option(`ID ${recipe.index} · ${recipe.name}`, recipe.id)
+        )
     );
+    if (recipeId && recipes.some(recipe => recipe.id === recipeId))
+    {
+        list.value = recipeId;
+    }
+    else
+    {
+        list.selectedIndex = -1;
+    }
+    managedRecipeId = list.value || null;
+    const recipe = recipes.find(item => item.id === managedRecipeId);
+    $('recipeManagerIndex').value = recipe?.index ?? nextRecipeIndex();
+    $('recipeManagerName').value = recipe?.name || '';
+    $('recipeManagerDescription').value = recipe?.description || '';
+    $('recipeProductRotation').value = recipe?.product_rotation_deg ?? 0;
+    $('recipeProductTilt').value = recipe?.product_tilt_deg ?? 0;
+    $('deleteManagedRecipe').disabled = !recipe || recipes.length <= 1;
+}
 
+$('manageRecipes').onclick = () => {
+    renderRecipeManager(selected()?.id || null);
+    $('recipeManagerDialog').showModal();
+};
 
-$('editRecipe').onclick =
-    guarded(
-        async () => {
+$('closeRecipeManager').onclick = () =>
+    $('recipeManagerDialog').close();
 
-            const recipe =
-                selected();
+$('recipeManagerSelect').onchange = event =>
+    renderRecipeManager(event.target.value);
 
+$('newManagedRecipe').onclick = () => {
+    renderRecipeManager(null);
+    $('recipeManagerName').focus();
+};
 
-            if (!recipe)
-            {
-                return;
-            }
+$('recipeManagerForm').onsubmit = guarded(async event => {
+    event.preventDefault();
+    const result = await cmd('recipe.upsert', {
+        ...(managedRecipeId ? {recipe_id: managedRecipeId} : {}),
+        index: Number($('recipeManagerIndex').value),
+        name: $('recipeManagerName').value.trim(),
+        description: $('recipeManagerDescription').value.trim(),
+        product_rotation_deg: Number($('recipeProductRotation').value),
+        product_tilt_deg: Number($('recipeProductTilt').value)
+    });
+    clearPoint();
+    await loadRecipes(result.recipe.id);
+    renderRecipeManager(result.recipe.id);
+});
 
+$('deleteManagedRecipe').onclick = guarded(async () => {
+    const recipe = recipes.find(item => item.id === managedRecipeId);
+    if (!recipe || !confirm(`ID ${recipe.index} · ${recipe.name} 레시피와 포인트를 삭제할까요?`))
+    {
+        return;
+    }
+    await cmd('recipe.delete', {recipe_id: recipe.id});
+    clearPoint();
+    await loadRecipes();
+    renderRecipeManager(selected()?.id || null);
+});
 
-            const name =
-                prompt(
-                    '레시피 이름',
-                    recipe.name
-                );
-
-
-            if (!name)
-            {
-                return;
-            }
-
-
-            const description =
-                prompt(
-                    '설명',
-                    recipe.description
-                );
-
-
-            if (
-                description === null
-            )
-            {
-                return;
-            }
-
-
-            await cmd(
-                'recipe.upsert',
-
-                {
-                    recipe_id:
-                        recipe.id,
-
-                    name,
-
-                    description
-                }
-            );
-
-
-            await loadRecipes();
-        }
-    );
-
-
-$('deleteRecipe').onclick =
-    guarded(
-        async () => {
-
-            const recipe =
-                selected();
-
-
-            if (
-                recipe &&
-                confirm(
-                    recipe.name
-                    + ' 레시피와 포인트 삭제?'
-                )
-            )
-            {
-                await cmd(
-                    'recipe.delete',
-
-                    {
-                        recipe_id:
-                            recipe.id
-                    }
-                );
-
-
-                clearPoint();
-
-
-                await loadRecipes();
-            }
-        }
-    );
-
-
+$('previewRecipePose').onclick = guarded(async () => {
+    const recipe = selected();
+    const point = selectedPoint();
+    if (!recipe || !point)
+    {
+        throw Error('미리 볼 레시피 포인트를 선택하세요.');
+    }
+    const result = await cmd('recipe.pose_preview', {
+        recipe_id: recipe.id,
+        point_id: point.id
+    }, true);
+    const correction = result.pose_correction;
+    $('recipePoseStatus').textContent = correction
+        ? `보정 Pan ${result.pan.toFixed(2)}° / Tilt ${result.tilt.toFixed(2)}° · 회전축 ${correction.rotation_axis}, 틸팅축 ${correction.tilt_axis}${correction.z_certified ? '' : ' · CAD Z 미인증: 추정값'}`
+        : `기준 자세 Pan ${result.pan.toFixed(2)}° / Tilt ${result.tilt.toFixed(2)}°`;
+});
 $('runRecipeSequence').onclick =
     guarded(
         runRecipeSequenceTest

@@ -17,6 +17,7 @@ from .drawing_calibration import (
     fit_affine_calibration,
     fit_inverse_xy_calibration,
     load_model_file,
+    predict_product_pose,
 )
 from .recipe_store import RecipeStore, app_state_dir, now_iso
 
@@ -612,6 +613,77 @@ class DrawingStore:
             "z": target_z,
             "points_used": fit.points_used,
             "model": "planar_projective_residual" if fit.coordinate_axes is not None else "affine_3d",
+            "rms_pan_error": round(fit.rms_pan_error, 4),
+            "rms_tilt_error": round(fit.rms_tilt_error, 4),
+        }
+
+    def estimate_product_pose_point(
+        self,
+        source_note: str,
+        base_pan: float,
+        base_tilt: float,
+        rotation_deg: float,
+        tilt_deg: float,
+    ) -> dict[str, Any]:
+        source = source_note.splitlines()[0].split(" ", 2) if source_note else []
+        if len(source) != 3 or source[0] != "CAD_TARGET":
+            raise ValueError("제품 각도 보정에는 도면에서 저장한 레시피 포인트가 필요합니다.")
+        group_id, separator, target_id = source[2].partition(":")
+        if not separator or not target_id:
+            raise ValueError("레시피 포인트의 CAD 연결 정보가 올바르지 않습니다.")
+        record = self._record(source[1])
+        point_groups = record.get("points_by_file") or {"": self._points(record)}
+        all_points = [point for group in point_groups.values() for point in group]
+        group_points = next(
+            (
+                group for group in point_groups.values()
+                if any(
+                    str(point.get("group_id")) == group_id
+                    and str(point.get("target_id") or point.get("id")) == target_id
+                    for point in group
+                )
+            ),
+            None,
+        )
+        if group_points is None:
+            raise KeyError(f"CAD target is missing: {source[2]}")
+        target = next(
+            point for point in group_points
+            if str(point.get("group_id")) == group_id
+            and str(point.get("target_id") or point.get("id")) == target_id
+        )
+        if "z" not in target or not all_points:
+            raise ValueError("제품 각도 보정에 필요한 CAD XYZ가 없습니다.")
+        positions = [DrawingPoint.from_dict(point).position for point in all_points]
+        limits = [
+            (min(position[axis] for position in positions), max(position[axis] for position in positions))
+            for axis in range(3)
+        ]
+        pivot = tuple((minimum + maximum) / 2.0 for minimum, maximum in limits)
+        axes = sorted(range(3), key=lambda axis: limits[axis][1] - limits[axis][0], reverse=True)
+        fit = fit_affine_calibration([DrawingPoint.from_dict(point) for point in group_points])
+        position = DrawingPoint.from_dict(target).position
+        original_pan, original_tilt, _ = predict_product_pose(
+            fit, position, pivot, axes[0], axes[1], 0.0, 0.0
+        )
+        rotated_pan, rotated_tilt, transformed = predict_product_pose(
+            fit, position, pivot, axes[0], axes[1], rotation_deg, tilt_deg
+        )
+        pan_delta = (rotated_pan - original_pan + 180.0) % 360.0 - 180.0
+        pan = (float(base_pan) + pan_delta) % 360.0
+        tilt = float(base_tilt) + rotated_tilt - original_tilt
+        if not -60.0 <= tilt <= 60.0:
+            raise CalibrationError("보정된 Tilt가 장비 이동 범위를 벗어났습니다.")
+        return {
+            "pan": round(pan, 2),
+            "tilt": round(tilt, 2),
+            "drawing_id": source[1],
+            "target_id": target_id,
+            "rotation_axis": "XYZ"[axes[0]],
+            "tilt_axis": "XYZ"[axes[1]],
+            "pivot": [round(value, 3) for value in pivot],
+            "transformed_xyz": [round(value, 3) for value in transformed],
+            "z_certified": bool(target.get("contact_z_certified")),
             "rms_pan_error": round(fit.rms_pan_error, 4),
             "rms_tilt_error": round(fit.rms_tilt_error, 4),
         }

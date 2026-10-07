@@ -71,7 +71,7 @@ from .protocol import (
     verify_frame_checksum,
     zone_scan,
 )
-from .recipe_store import RecipeStore, app_state_dir
+from .recipe_store import RecipePoint, RecipeStore, app_state_dir
 from .drawing_store import DrawingStore
 from .motion_tracker import MotionTracker
 from .network_utils import resolve_bind_host
@@ -1062,6 +1062,22 @@ class HeadlessController:
             )
         return frames
 
+    def _recipe_motion_target(
+        self, recipe_id: str, point: RecipePoint
+    ) -> tuple[dict[str, float], dict[str, Any] | None]:
+        recipe = self.recipe_store.get_recipe(recipe_id)
+        target = {"pan": point.pan, "tilt": point.tilt}
+        if recipe.product_rotation_deg == 0.0 and recipe.product_tilt_deg == 0.0:
+            return target, None
+        correction = self.drawing_store.estimate_product_pose_point(
+            point.note,
+            point.pan,
+            point.tilt,
+            recipe.product_rotation_deg,
+            recipe.product_tilt_deg,
+        )
+        return {"pan": correction["pan"], "tilt": correction["tilt"]}, correction
+
     def command(
         self,
         command: str,
@@ -1179,6 +1195,7 @@ class HeadlessController:
             if command == "point.select":
                 recipe_id = str(params.get("recipe_id") or self._selected_recipe_id or "").strip()
                 point_id = str(params.get("point_id", "")).strip()
+                recipe_id = self.recipe_store.get_recipe(recipe_id).id
                 point = self.recipe_store.get_point(recipe_id, point_id)
                 self._selected_recipe_id = recipe_id
                 self._selected_point_id = point.id
@@ -1190,14 +1207,16 @@ class HeadlessController:
                     raise HeadlessApiError(
                         "SELECTION_REQUIRED", "recipe_id and point_id must be selected first"
                     )
+                recipe_id = self.recipe_store.get_recipe(recipe_id).id
                 point = self.recipe_store.get_point(recipe_id, point_id)
                 if not point.enabled:
                     raise HeadlessApiError("DISABLED", "point is disabled")
                 self._selected_recipe_id = recipe_id
                 self._selected_point_id = point_id
+                target, correction = self._recipe_motion_target(recipe_id, point)
                 result = self.command(
                     "motion.absolute",
-                    {"pan": point.pan, "tilt": point.tilt},
+                    target,
                     client_id=client_id,
                     request_id=request_id,
                 )
@@ -1205,7 +1224,12 @@ class HeadlessController:
                     self._pending_motion.update(
                         command=command, recipe_id=recipe_id, point_id=point_id
                     )
-                return {**result, "recipe_id": recipe_id, "point_id": point_id}
+                return {
+                    **result,
+                    "recipe_id": recipe_id,
+                    "point_id": point_id,
+                    "pose_correction": correction,
+                }
             if command == "home.start":
                 self._home_valid = False
                 result = self.command(
@@ -1674,6 +1698,18 @@ class HeadlessController:
 
         if command == "recipe.list":
             return {"recipes": self.recipe_store.list_recipes()}
+        if command == "recipe.pose_preview":
+            recipe_id = self.recipe_store.get_recipe(str(params["recipe_id"])).id
+            if params.get("point_id"):
+                point = self.recipe_store.get_point(recipe_id, str(params["point_id"]))
+                target, correction = self._recipe_motion_target(recipe_id, point)
+                return {"recipe_id": recipe_id, "point_id": point.id, **target, "pose_correction": correction}
+            targets = []
+            for point in self.recipe_store.get_recipe(recipe_id).points:
+                if point.enabled:
+                    target, correction = self._recipe_motion_target(recipe_id, point)
+                    targets.append({"point_id": point.id, **target, "pose_correction": correction})
+            return {"recipe_id": recipe_id, "targets": targets}
         if command == "recipe.export":
             return {
                 "document": self.recipe_store.export_document(
@@ -1687,6 +1723,18 @@ class HeadlessController:
                 recipe_id=params.get("recipe_id"),
                 name=str(params.get("name") or "Recipe"),
                 description=str(params.get("description", "")),
+                index=(
+                    self._int(params, "index", minimum=1, maximum=2_147_483_647)
+                    if "index" in params else None
+                ),
+                product_rotation_deg=self._float(
+                    params, "product_rotation_deg", minimum=-360.0,
+                    maximum=360.0, required=False,
+                ),
+                product_tilt_deg=self._float(
+                    params, "product_tilt_deg", minimum=-360.0,
+                    maximum=360.0, required=False,
+                ),
             )
             return {"recipe": recipe.to_dict()}
         if command == "recipe.delete":
@@ -1719,15 +1767,16 @@ class HeadlessController:
             point = self.recipe_store.get_point(str(params["recipe_id"]), str(params["point_id"]))
             if not point.enabled:
                 raise HeadlessApiError("DISABLED", "point is disabled")
-            return self.command(
+            target, correction = self._recipe_motion_target(str(params["recipe_id"]), point)
+            result = self.command(
                 "motion.absolute",
                 {
-                    "pan": point.pan,
-                    "tilt": point.tilt,
+                    **target,
                     "pan_speed": point.pan_speed,
                     "tilt_speed": point.tilt_speed,
                 },
-            ) 
+            )
+            return {**result, "pose_correction": correction}
 
         if command == "lens.motion":
             action = self._enum(params, "action", {"zoom_in", "zoom_out", "focus_near", "focus_far", "iris_open", "iris_close"})
