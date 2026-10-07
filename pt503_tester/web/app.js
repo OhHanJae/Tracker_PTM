@@ -1088,10 +1088,14 @@ document
                     jog = {
 
                         pan:
-                            element.dataset.pan,
+                            $('manualInvertPan').checked
+                                ? ({ left: 'right', right: 'left' }[element.dataset.pan] || element.dataset.pan)
+                                : element.dataset.pan,
 
                         tilt:
-                            element.dataset.tilt
+                            $('manualInvertTilt').checked
+                                ? ({ up: 'down', down: 'up' }[element.dataset.tilt] || element.dataset.tilt)
+                                : element.dataset.tilt
                     };
 
 
@@ -1695,7 +1699,7 @@ async function waitForRecipeMotion(point)
         Date.now() < deadline
     )
     {
-        await sleep(300);
+        await sleep(150);
 
         // 순차 테스트에서는 단발 조회만 수행한다.
         // refresh()를 호출하면 700ms 자동 갱신 타이머가 계속 추가될 수 있으므로
@@ -1720,12 +1724,15 @@ async function waitForRecipeMotion(point)
 
     const dwellMs =
         Math.max(
-            250,
+            0,
             Number(point.dwell_ms || 0)
         );
 
 
-    await sleep(dwellMs);
+    if (dwellMs)
+    {
+        await sleep(dwellMs);
+    }
 }
 
 

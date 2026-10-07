@@ -421,7 +421,8 @@ class HeadlessController:
                         if now >= next_poll and (self.monitor_config["enabled"] or self._tracker):
                             self.send(query_pan(self._address), wait_ms=80)
                             self.send(query_tilt(self._address), wait_ms=80)
-                            next_poll = time.monotonic() + self.monitor_config["interval_ms"] / 1000
+                            poll_interval_ms = 250 if self._tracker else self.monitor_config["interval_ms"]
+                            next_poll = time.monotonic() + poll_interval_ms / 1000
                         if now >= next_health:
                             health_rx = self.send(query_pan(self._address), wait_ms=80)
                             if health_rx:
