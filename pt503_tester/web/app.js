@@ -1221,155 +1221,216 @@ window.addEventListener(
 // 상태 조회
 // ============================================================================
 
-async function refresh()
+let refreshTimer = null;
+let refreshPromise = null;
+
+
+// 상태를 딱 한 번만 조회한다.
+// 순차 테스트에서는 이 함수를 사용해서 자동 갱신 타이머가 늘어나지 않게 한다.
+async function refreshOnce()
 {
-    try
+    // 이미 /api/status 요청이 진행 중이면 같은 요청을 같이 기다린다.
+    // 백그라운드 갱신과 순차 테스트 갱신이 겹쳐 응답 순서가 뒤섞이는 것을 방지한다.
+    if (refreshPromise)
     {
-        status =
-            await request(
-                '/api/status'
-            );
-
-
-        if (
-            status.serial.connected
-        )
-        {
-            $('connection').textContent =
-                `${status.serial.port} / ` +
-                `${status.serial.baudrate} / ` +
-                `주소 ${status.serial.address}`;
-        }
-
-        else if (
-            status.scanning
-        )
-        {
-            $('connection').textContent =
-                '탐색 중';
-        }
-
-        else
-        {
-            $('connection').textContent =
-                '연결 안 됨';
-        }
-
-
-        $('actualPan').textContent =
-            status.position.pan === null
-                ? '—'
-                : status.position.pan
-                    .toFixed(2)
-                    + '°';
-
-
-        $('actualTilt').textContent =
-            status.position.tilt === null
-                ? '—'
-                : status.position.tilt
-                    .toFixed(2)
-                    + '°';
-
-
-        $('motionState').textContent =
-            status.motion.state
-            || 'idle';
-
-
-        if ($('laserState'))
-        {
-            $('laserState').textContent =
-                (
-                    status.laser.armed
-                        ? 'ARM / '
-                        : 'DISARM / '
-                )
-                +
-                (
-                    status.laser.on
-                        ? 'ON'
-                        : 'OFF'
-                );
-        }
-
-
-        if (
-            status.last_tx &&
-            JSON.stringify(
-                status.last_tx
-            ) !== lastTx
-        )
-        {
-            lastTx =
-                JSON.stringify(
-                    status.last_tx
-                );
-
-
-            log(
-                'TX',
-                status.last_tx
-            );
-        }
-
-
-        const rx =
-            JSON.stringify(
-                status.last_rx
-            );
-
-
-        if (
-            rx !== lastRx &&
-            status.last_rx.length
-        )
-        {
-            lastRx =
-                rx;
-
-
-            log(
-                'RX',
-                status.last_rx
-            );
-        }
-
-
-        $('scan').disabled =
-            status.scanning ||
-            status.serial.connected;
-
-
-        $('connect').disabled =
-            status.scanning ||
-            status.serial.connected;
-
-
-        $('disconnect').disabled =
-            !status.serial.connected;
+        return refreshPromise;
     }
 
-    catch
+
+    refreshPromise =
+        (async () => {
+            try
+            {
+                status =
+                    await request(
+                        '/api/status'
+                    );
+
+
+                if (
+                    status.serial.connected
+                )
+                {
+                    $('connection').textContent =
+                        `${status.serial.port} / ` +
+                        `${status.serial.baudrate} / ` +
+                        `주소 ${status.serial.address}`;
+                }
+
+                else if (
+                    status.scanning
+                )
+                {
+                    $('connection').textContent =
+                        '탐색 중';
+                }
+
+                else
+                {
+                    $('connection').textContent =
+                        '연결 안 됨';
+                }
+
+
+                $('actualPan').textContent =
+                    status.position.pan === null
+                        ? '—'
+                        : status.position.pan
+                            .toFixed(2)
+                            + '°';
+
+
+                $('actualTilt').textContent =
+                    status.position.tilt === null
+                        ? '—'
+                        : status.position.tilt
+                            .toFixed(2)
+                            + '°';
+
+
+                $('motionState').textContent =
+                    status.motion.state
+                    || 'idle';
+
+
+                if ($('laserState'))
+                {
+                    $('laserState').textContent =
+                        (
+                            status.laser.armed
+                                ? 'ARM / '
+                                : 'DISARM / '
+                        )
+                        +
+                        (
+                            status.laser.on
+                                ? 'ON'
+                                : 'OFF'
+                        );
+                }
+
+
+                if (
+                    status.last_tx &&
+                    JSON.stringify(
+                        status.last_tx
+                    ) !== lastTx
+                )
+                {
+                    lastTx =
+                        JSON.stringify(
+                            status.last_tx
+                        );
+
+
+                    log(
+                        'TX',
+                        status.last_tx
+                    );
+                }
+
+
+                const rx =
+                    JSON.stringify(
+                        status.last_rx
+                    );
+
+
+                if (
+                    rx !== lastRx &&
+                    status.last_rx.length
+                )
+                {
+                    lastRx =
+                        rx;
+
+
+                    log(
+                        'RX',
+                        status.last_rx
+                    );
+                }
+
+
+                $('scan').disabled =
+                    status.scanning ||
+                    status.serial.connected;
+
+
+                $('connect').disabled =
+                    status.scanning ||
+                    status.serial.connected;
+
+
+                $('disconnect').disabled =
+                    !status.serial.connected;
+            }
+
+            catch
+            {
+                $('connection').textContent =
+                    '서버 연결 끊김';
+
+
+                status =
+                    {};
+
+
+                jog =
+                    null;
+            }
+        })();
+
+
+    try
     {
-        $('connection').textContent =
-            '서버 연결 끊김';
-
-
-        status =
-            {};
-
-
-        jog =
-            null;
+        return await refreshPromise;
     }
 
     finally
     {
+        refreshPromise =
+            null;
+    }
+}
+
+
+// 화면 상태 갱신용 단일 루프.
+// 여러 곳에서 refresh()가 호출되더라도 타이머는 항상 하나만 유지한다.
+function scheduleRefresh()
+{
+    if (refreshTimer)
+    {
+        clearTimeout(
+            refreshTimer
+        );
+    }
+
+
+    refreshTimer =
         setTimeout(
-            refresh,
+            () => {
+                refreshTimer =
+                    null;
+
+
+                refresh();
+            },
             700
         );
+}
+
+
+async function refresh()
+{
+    try
+    {
+        await refreshOnce();
+    }
+
+    finally
+    {
+        scheduleRefresh();
     }
 }
 
@@ -1635,7 +1696,11 @@ async function waitForRecipeMotion(point)
     )
     {
         await sleep(300);
-        await refresh();
+
+        // 순차 테스트에서는 단발 조회만 수행한다.
+        // refresh()를 호출하면 700ms 자동 갱신 타이머가 계속 추가될 수 있으므로
+        // 반드시 refreshOnce()를 사용한다.
+        await refreshOnce();
 
 
         const state =

@@ -95,6 +95,7 @@ MAX_TCP_LINE_BYTES = 65_536
 # another motion mode, serial disconnect, or communication failure.
 JOG_RESEND_INTERVAL_S = 3.5
 PELCO_MIN_COMMAND_GAP_S = 0.32
+PELCO_ABSOLUTE_AXIS_GAP_S = 0.05
 
 PROTOCOL_NAME = 'PT503-Control'
 PROTOCOL_VERSION = '1.0'
@@ -950,41 +951,77 @@ class HeadlessController:
     def protocol_catalog() -> dict[str, Any]:
         return api_protocol_catalog(tuple(sorted(set(SUPPORTED_COMMANDS) | LASER_API_COMMANDS | DRAWING_API_COMMANDS)))
 
-    def send(self, command: OutgoingCommand, *, wait_ms: int = 80) -> list[dict[str, Any]]:
+    def send(
+        self,
+        command: OutgoingCommand,
+        *,
+        wait_ms: int = 80,
+        min_gap_s: float | None = None,
+    ) -> list[dict[str, Any]]:
         with self._lock:
             if not self.connected or self._serial is None:
-                raise HeadlessApiError("SERIAL_NOT_CONNECTED", "serial port is not connected")
+                raise HeadlessApiError(
+                    "SERIAL_NOT_CONNECTED",
+                    "serial port is not connected",
+                )
+
             try:
-                # Pelco-D receivers can become confused when commands are packed
-                # too closely.  Keep a conservative >=300 ms command-to-command
-                # gap on the live PT serial bus.
+                # 일반 명령은 기존 320ms 간격을 유지한다.
+                #
+                # 단, Pan/Tilt 절대위치 명령처럼 연속 송신이 필요한 경우에는
+                # 호출 측에서 min_gap_s를 별도로 지정할 수 있다.
+                gap_s = (
+                    PELCO_MIN_COMMAND_GAP_S
+                    if min_gap_s is None
+                    else max(0.0, float(min_gap_s))
+                )
+
                 elapsed = time.monotonic() - self._last_serial_tx_at
-                remaining = PELCO_MIN_COMMAND_GAP_S - elapsed
+                remaining = gap_s - elapsed
+
                 if self._last_serial_tx_at and remaining > 0:
                     time.sleep(remaining)
 
                 self._serial.write(command.data)
                 self._serial.flush()
+
                 self._last_serial_tx_at = time.monotonic()
+
                 self.last_tx = {
                     "hex": frame_to_hex(command.data),
                     "description": command.description,
                     "category": command.category,
                     "time": time.time(),
                 }
+
                 deadline = time.perf_counter() + wait_ms / 1000.0
                 received = bytearray()
+
                 while time.perf_counter() < deadline:
                     count = self._serial.in_waiting
+
                     if count:
-                        received.extend(self._serial.read(count))
+                        received.extend(
+                            self._serial.read(count)
+                        )
+
                     time.sleep(0.005)
+
             except serial.SerialException as exc:
                 self.close()
-                raise HeadlessApiError("SERIAL_IO_FAILED", str(exc)) from exc
-            decoded = self._decode_blob(bytes(received), command.data[6])
+                raise HeadlessApiError(
+                    "SERIAL_IO_FAILED",
+                    str(exc),
+                ) from exc
+
+            decoded = self._decode_blob(
+                bytes(received),
+                command.data[6],
+            )
+
             self.last_rx.extend(decoded)
             self.last_rx = self.last_rx[-50:]
+
             return decoded
 
     def _decode_blob(self, blob: bytes, last_tx_checksum: int | None = None) -> list[dict[str, Any]]:
@@ -1474,34 +1511,134 @@ class HeadlessController:
                 )
             }
         if command == "motion.absolute":
-            pan = self._float(params, "pan", required=False, minimum=0.0, maximum=359.99)
-            tilt = self._float(params, "tilt", required=False, minimum=-60.0, maximum=60.0)
+            pan = self._float(
+                params,
+                "pan",
+                required=False,
+                minimum=0.0,
+                maximum=359.99,
+            )
+
+            tilt = self._float(
+                params,
+                "tilt",
+                required=False,
+                minimum=-60.0,
+                maximum=60.0,
+            )
+
             if pan is None and tilt is None:
-                raise HeadlessApiError("INVALID_PARAMS", "pan or tilt is required")
+                raise HeadlessApiError(
+                    "INVALID_PARAMS",
+                    "pan or tilt is required",
+                )
+
             rx = []
+
+            # --------------------------------------------------------
+            # 자동 위치이동 속도 설정
+            # --------------------------------------------------------
+
             if "pan_speed" in params or "tilt_speed" in params:
                 rx.extend(
                     self.send(
                         set_position_speed(
                             self._address,
-                            self._int(params, "pan_speed", 32, minimum=0, maximum=63),
-                            self._int(params, "tilt_speed", 32, minimum=0, maximum=63),
+                            self._int(
+                                params,
+                                "pan_speed",
+                                32,
+                                minimum=0,
+                                maximum=63,
+                            ),
+                            self._int(
+                                params,
+                                "tilt_speed",
+                                32,
+                                minimum=0,
+                                maximum=63,
+                            ),
                         ),
                         wait_ms=80,
                     )
                 )
-            if pan is not None:
+
+            # --------------------------------------------------------
+            # Pan + Tilt 동시 이동
+            #
+            # Pelco-D 절대위치 명령은
+            # Pan  = 0x4B
+            # Tilt = 0x4D
+            #
+            # 하나의 프레임으로 동시에 지정할 수 없으므로
+            # 두 프레임을 최대한 짧은 간격으로 연속 송신한다.
+            # --------------------------------------------------------
+
+            if pan is not None and tilt is not None:
+
+                # Pan 목표 먼저 전송.
+                # 응답 대기는 하지 않고 바로 Tilt 명령 준비.
                 rx.extend(
                     self.send(
-                        set_pan_position(self._address, pan),
-                        wait_ms=0 if tilt is not None else 80,
+                        set_pan_position(
+                            self._address,
+                            pan,
+                        ),
+                        wait_ms=0,
                     )
                 )
-            if pan is not None and tilt is not None and params.get("axis_delay_ms", 0):
-                time.sleep(float(params.get("axis_delay_ms", 350)) / 1000.0)
-            if tilt is not None:
-                rx.extend(self.send(set_tilt_position(self._address, tilt), wait_ms=80))
-            return {"accepted": True, "target": {"pan": pan, "tilt": tilt}, "rx": rx}
+
+                # Tilt는 일반 320ms 간격을 적용하지 않고
+                # 전용 50ms 간격으로 바로 전송.
+                rx.extend(
+                    self.send(
+                        set_tilt_position(
+                            self._address,
+                            tilt,
+                        ),
+                        wait_ms=80,
+                        min_gap_s=PELCO_ABSOLUTE_AXIS_GAP_S,
+                    )
+                )
+
+            # --------------------------------------------------------
+            # Pan 단독 이동
+            # --------------------------------------------------------
+
+            elif pan is not None:
+                rx.extend(
+                    self.send(
+                        set_pan_position(
+                            self._address,
+                            pan,
+                        ),
+                        wait_ms=80,
+                    )
+                )
+
+            # --------------------------------------------------------
+            # Tilt 단독 이동
+            # --------------------------------------------------------
+
+            elif tilt is not None:
+                rx.extend(
+                    self.send(
+                        set_tilt_position(
+                            self._address,
+                            tilt,
+                        ),
+                        wait_ms=80,
+                    )
+                )
+
+            return {
+                "accepted": True,
+                "target": {
+                    "pan": pan,
+                    "tilt": tilt,
+                },
+                "rx": rx,
+            }
         if command == "motion.completion_config":
             if "tolerance_deg" in params:
                 self.completion_config["tolerance_deg"] = float(params["tolerance_deg"])
