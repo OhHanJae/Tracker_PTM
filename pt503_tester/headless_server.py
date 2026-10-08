@@ -14,6 +14,7 @@ import re
 import socketserver
 import sys
 import threading
+import uuid
 import time
 import math
 from pathlib import Path
@@ -190,6 +191,9 @@ class HeadlessController:
         self.motion_state = "idle"
         self._event_callback: Callable[[str, dict[str, Any], str | None], None] | None = None
         self._pending_motion: dict[str, Any] | None = None
+        self._completed_motion_id: str | None = None
+        self._failed_motion_id: str | None = None
+        self._last_motion_error: str = ""
         self._selected_recipe_id: str | None = None
         self._selected_point_id: str | None = None
         self._home_valid = False
@@ -268,17 +272,21 @@ class HeadlessController:
         if pending is None:
             return
         data = {
+            "motion_id": pending.get("motion_id"),
             "request_id": pending.get("request_id"),
             "command": pending.get("command"),
             "recipe_id": pending.get("recipe_id"),
             "point_id": pending.get("point_id"),
         }
         if error is None:
+            self._completed_motion_id = pending.get("motion_id")
             if pending.get("home"):
                 self._home_valid = True
             self._emit_event("motion.completed", data, pending.get("client_id"))
         else:
             code, message = error
+            self._failed_motion_id = pending.get("motion_id")
+            self._last_motion_error = code
             self._emit_event(
                 "motion.error",
                 {**data, "error": {"code": code, "message": message}},
@@ -726,7 +734,15 @@ class HeadlessController:
                     "address": self._address,
                 },
                 "position": {"pan": self.current_pan, "tilt": self.current_tilt},
-                "motion": {"completion": dict(self.completion_config), "state": self.motion_state},
+                "motion": {
+                    "completion": dict(self.completion_config),
+                    "state": self.motion_state,
+                    "id": self._pending_motion.get("motion_id") if self._pending_motion else None,
+                    "completed_id": self._completed_motion_id,
+                    "failed_id": self._failed_motion_id,
+                    "last_error": self._last_motion_error,
+                },
+                "homed": self._home_valid,
                 "monitor": dict(self.monitor_config),
                 "auto_reconnect": {
                     **dict(self.auto_reconnect_config),
@@ -1372,6 +1388,7 @@ class HeadlessController:
                 )
                 self.motion_state = "tracking"
                 self._pending_motion = {
+                    "motion_id": uuid.uuid4().hex,
                     "client_id": client_id,
                     "request_id": request_id,
                     "command": "motion.absolute",
@@ -1379,6 +1396,7 @@ class HeadlessController:
                     "point_id": None,
                     "home": False,
                 }
+                result = {**result, "motion_id": self._pending_motion["motion_id"]}
             if force_stop:
                 result = {**result, "completed": True, "stopped": True}
             return result

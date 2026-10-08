@@ -432,6 +432,10 @@ class RecipeStore:
         for point in recipe.points:
             if point.id == point_id:
                 return point
+        if str(point_id).isdecimal():
+            for point in recipe.points:
+                if point.order == int(point_id):
+                    return point
         raise KeyError(f"unknown point: {point_id}")
 
     def delete_point(self, recipe_id: str, point_id: str) -> None:
