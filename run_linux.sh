@@ -68,11 +68,20 @@ VENV_DIR="${PT503_VENV:-$DEFAULT_VENV}"
 VENV_PYTHON="$VENV_DIR/bin/python"
 
 if [[ ! -x "$VENV_PYTHON" ]]; then
+  if ! python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 10))'; then
+    echo "[ERROR] Python 3.10 or later is required."
+    exit 1
+  fi
   echo "[1/3] Creating virtual environment..."
   if ! python3 -m venv "$VENV_DIR"; then
     echo "[ERROR] 가상환경 생성 실패. sudo apt install python3-venv 를 확인하세요."
     exit 1
   fi
+fi
+
+if ! "$VENV_PYTHON" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))'; then
+  echo "[ERROR] $VENV_DIR must use Python 3.10 or later."
+  exit 1
 fi
 
 install_from_wheelhouse_or_pip() {

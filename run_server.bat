@@ -8,7 +8,7 @@ set "VENV_PYTHON=.venv-server\Scripts\python.exe"
 set "VENV_OK="
 
 if exist "%VENV_PYTHON%" (
-    "%VENV_PYTHON%" -c "import sys" >nul 2>nul
+    "%VENV_PYTHON%" -c "import sys; raise SystemExit(sys.version_info < (3, 10))" >nul 2>nul
     if not errorlevel 1 set "VENV_OK=1"
 )
 
@@ -47,9 +47,9 @@ exit /b 1
 set "CANDIDATE=%~1"
 set "CANDIDATE_ARG=%~2"
 if "%CANDIDATE_ARG%"=="" (
-    "%CANDIDATE%" -c "import sys" >nul 2>nul
+    "%CANDIDATE%" -c "import sys; raise SystemExit(sys.version_info < (3, 10))" >nul 2>nul
 ) else (
-    "%CANDIDATE%" "%CANDIDATE_ARG%" -c "import sys" >nul 2>nul
+    "%CANDIDATE%" "%CANDIDATE_ARG%" -c "import sys; raise SystemExit(sys.version_info < (3, 10))" >nul 2>nul
 )
 if not errorlevel 1 (
     set "BOOTSTRAP_PYTHON=%CANDIDATE%"
