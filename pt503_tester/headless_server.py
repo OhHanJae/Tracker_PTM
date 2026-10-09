@@ -720,6 +720,7 @@ class HeadlessController:
             self._health_misses = 0
             self._last_serial_tx_at = 0.0
             self.current_pan = self.current_tilt = None
+            self._home_valid = False
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -1062,10 +1063,6 @@ class HeadlessController:
                 self.current_pan = float(response.value)
             elif response.kind == "tilt" and isinstance(response.value, (int, float)):
                 self.current_tilt = float(response.value)
-            if self.current_pan is not None and self.current_tilt is not None:
-                pan_error = abs(((self.current_pan + 180.0) % 360.0) - 180.0)
-                tolerance = float(self.completion_config["tolerance_deg"])
-                self._home_valid = pan_error <= tolerance and abs(self.current_tilt) <= tolerance
             frames.append(
                 {
                     "hex": frame.hex(" ").upper(),
