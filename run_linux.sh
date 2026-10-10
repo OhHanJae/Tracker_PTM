@@ -256,6 +256,13 @@ TCP_HOST="${PT503_TCP_HOST:-$WEB_HOST}"
 TCP_PORT="${PT503_TCP_PORT:-8765}"
 extra_args=("$@")
 parse_effective_server_args "${extra_args[@]}"
+if [[ "${CORE_MANAGED_PROCESS:-0}" == "1" ]]; then
+  WEB_HOST="${CORE_HTTP_HOST:?Core HTTP bind host is required}"
+  WEB_PORT="${CORE_HTTP_PORT:?Core HTTP bind port is required}"
+  TCP_HOST="${CORE_TCP_HOST:?Core TCP bind host is required}"
+  TCP_PORT="${CORE_TCP_PORT:?Core TCP bind port is required}"
+  TCP_ENABLED=1
+fi
 args=(--server --host "$WEB_HOST" --port "$WEB_PORT" --tcp-host "$TCP_HOST" --tcp-port "$TCP_PORT" "${extra_args[@]}")
 
 echo "[2/3] Checking headless dependencies..."

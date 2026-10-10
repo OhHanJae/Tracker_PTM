@@ -74,7 +74,7 @@ from .protocol import (
 from .recipe_store import RecipePoint, RecipeStore, app_state_dir
 from .drawing_store import DrawingStore
 from .motion_tracker import MotionTracker
-from .network_utils import resolve_bind_host
+from .network_utils import managed_server_endpoints, resolve_bind_host
 from .api_metadata import (
     command_templates,
     protocol_catalog as api_protocol_catalog,
@@ -2485,6 +2485,7 @@ def run_server(
     tcp_host: str | None = DEFAULT_TCP_HOST,
     tcp_port: int = DEFAULT_TCP_PORT,
 ) -> int:
+    host, port, tcp_host, tcp_port = managed_server_endpoints(host, port, tcp_host, tcp_port)
     host = resolve_bind_host(host)
     tcp_host = resolve_bind_host(tcp_host) if tcp_host else None
     controller = HeadlessController()
