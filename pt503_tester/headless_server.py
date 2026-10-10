@@ -65,7 +65,6 @@ from .protocol import (
     set_preset,
     set_scan_speed,
     set_tilt_position,
-    split_response_blob,
     start_cruise,
     stop,
     vendor_line_scan,
@@ -168,6 +167,7 @@ class HeadlessController:
         self.current_pan: float | None = None
         self.current_tilt: float | None = None
         self.last_rx: list[dict[str, Any]] = []
+        self._rx_buffer = bytearray()
         self.last_tx: dict[str, Any] | None = None
         self.completion_config = {"tolerance_deg": 0.2, "stable_samples": 3, "timeout_s": 30}
         self.monitor_config = {"enabled": False, "interval_ms": 500}
@@ -214,7 +214,9 @@ class HeadlessController:
         self._auto_scan_active = False
         self._last_auto_scan = 0.0
         self._service = threading.Thread(target=self._service_loop, daemon=True)
+        self._laser_service = threading.Thread(target=self._laser_service_loop, daemon=True)
         self._service.start()
+        self._laser_service.start()
 
     def set_event_callback(
         self,
@@ -280,6 +282,7 @@ class HeadlessController:
         }
         if error is None:
             self._completed_motion_id = pending.get("motion_id")
+            self._last_motion_error = ""
             if pending.get("home"):
                 self._home_valid = True
             self._emit_event("motion.completed", data, pending.get("client_id"))
@@ -366,26 +369,27 @@ class HeadlessController:
         self._shutdown.set()
         self._scan_cancel.set()
         self._service.join(timeout=2)
+        self._laser_service.join(timeout=2)
         self.close_laser()
         self.close()
+
+    def _laser_service_loop(self) -> None:
+        while not self._shutdown.wait(0.04):
+            with self._laser_lock:
+                if self._laser_deadline and time.monotonic() >= self._laser_deadline:
+                    try:
+                        self._laser_write_coil(False)
+                    except HeadlessApiError:
+                        # Retry OFF; an unacknowledged command does not prove OFF.
+                        self._laser_deadline = time.monotonic() + 0.2
+                    else:
+                        self._laser_deadline = 0.0
 
     def _service_loop(self) -> None:
         next_poll = 0.0
         next_health = 0.0
         while not self._shutdown.wait(0.04):
             self._publish_state_changes()
-            # Laser pulse watchdog must work even when PT-503 is disconnected.
-            with self._lock:
-                now = time.monotonic()
-                if self._laser_deadline and now >= self._laser_deadline:
-                    self._laser_deadline = 0.0
-                    try:
-                        self._laser_write_coil(False)
-                    except HeadlessApiError:
-                        # State is forced OFF locally; communication error is visible
-                        # in laser_last_rx / the next explicit API command.
-                        self.laser_on = False
-
             if self._should_auto_reconnect():
                 self._run_auto_reconnect()
                 continue
@@ -468,6 +472,8 @@ class HeadlessController:
 
     def _run_auto_reconnect(self) -> None:
         with self._lock:
+            if self._shutdown.is_set():
+                return
             self._auto_scan_active = True
             self._last_auto_scan = time.monotonic()
         self._publish_state_changes()
@@ -529,6 +535,8 @@ class HeadlessController:
     ) -> dict[str, Any]:
         """Open the USB-RS485 port connected to the Arduino laser controller."""
         with self._laser_lock:
+            if self._shutdown.is_set():
+                raise HeadlessApiError("SERVICE_STOPPING", "server is shutting down")
             self.close_laser()
             try:
                 self._laser_serial = serial.Serial(
@@ -616,7 +624,7 @@ class HeadlessController:
                         if len(received) >= minimum_response_bytes:
                             break
                     time.sleep(0.003)
-            except serial.SerialException as exc:
+            except (serial.SerialException, OSError) as exc:
                 raise HeadlessApiError("LASER_SERIAL_IO_FAILED", str(exc)) from exc
 
         response = bytes(received)
@@ -705,6 +713,11 @@ class HeadlessController:
             self._active_jog = None
             self._jog_owner_client_id = None
             self._tracker = None
+            self._finish_pending_motion(
+                error=("COMMUNICATION_ERROR", "PT503 serial connection was closed")
+            )
+            if self.motion_state not in {"communication_error", "communication_timeout"}:
+                self.motion_state = "disconnected"
             if self.connected:
                 try:
                     self._serial.write(stop(self._address).data)
@@ -721,6 +734,7 @@ class HeadlessController:
             self._last_serial_tx_at = 0.0
             self.current_pan = self.current_tilt = None
             self._home_valid = False
+            self._rx_buffer.clear()
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -785,6 +799,8 @@ class HeadlessController:
         enable_auto_reconnect: bool = True,
     ) -> dict[str, Any]:
         with self._lock:
+            if self._shutdown.is_set():
+                raise HeadlessApiError("SERVICE_STOPPING", "server is shutting down")
             self.close()
             try:
                 self._serial = serial.Serial(
@@ -861,6 +877,8 @@ class HeadlessController:
                         deadline = time.perf_counter() + timeout_ms / 1000.0
                         received = bytearray()
                         while time.perf_counter() < deadline:
+                            if self._scan_cancel.is_set() or self._shutdown.is_set():
+                                return {"found": False, "cancelled": True}
                             count = probe.in_waiting
                             if count:
                                 received.extend(probe.read(count))
@@ -1044,7 +1062,29 @@ class HeadlessController:
 
     def _decode_blob(self, blob: bytes, last_tx_checksum: int | None = None) -> list[dict[str, Any]]:
         frames = []
-        for frame in split_response_blob(blob):
+        self._rx_buffer.extend(blob)
+        while self._rx_buffer:
+            start = self._rx_buffer.find(0xFF)
+            if start < 0:
+                self._rx_buffer.clear()
+                break
+            del self._rx_buffer[:start]
+            if len(self._rx_buffer) < 4:
+                break
+            if len(self._rx_buffer) >= 7 and verify_frame_checksum(self._rx_buffer[:7]):
+                size = 7
+            elif decode_response(bytes(self._rx_buffer[:4]), last_tx_checksum).checksum_ok is True:
+                size = 4
+            elif self._rx_buffer[2] == 0 and self._rx_buffer[3] in {0x01, 0x59, 0x5B, 0x5D, 0x6D}:
+                # A position response can arrive across separate read windows.
+                if len(self._rx_buffer) < 7:
+                    break
+                del self._rx_buffer[0]
+                continue
+            else:
+                size = 4
+            frame = bytes(self._rx_buffer[:size])
+            del self._rx_buffer[:size]
             response = decode_response(frame, last_tx_checksum)
             if response.address != self._address or response.checksum_ok is not True:
                 continue
@@ -1091,6 +1131,8 @@ class HeadlessController:
         client_id: str | None = None,
         request_id: Any = None,
     ) -> dict[str, Any]:
+        if self._shutdown.is_set():
+            raise HeadlessApiError("SERVICE_STOPPING", "server is shutting down")
         if command in {"motor.status", "ptm.status"}:
             command = "system.status"
         if command == "protocol.hello":
@@ -1182,6 +1224,8 @@ class HeadlessController:
                 self._save_settings()
                 return dict(self.auto_reconnect_config)
         with self._lock:
+            if self._shutdown.is_set():
+                raise HeadlessApiError("SERVICE_STOPPING", "server is shutting down")
             if (
                 self.scanning
                 and command not in {"system.status", "system.ping", "system.commands", "serial.ports", "serial.scan_cancel"}
@@ -1273,6 +1317,9 @@ class HeadlessController:
                     tl = self._int(params, "tilt_level", pl, minimum=1, maximum=8)
 
                 with self._lock:
+                    self._finish_pending_motion(
+                        error=("MOTION_STOPPED", "movement was superseded by manual motion")
+                    )
                     if pan is PanDirection.STOP and tilt is TiltDirection.STOP:
                         self._active_jog = None
                         self._jog_owner_client_id = None
@@ -1331,6 +1378,14 @@ class HeadlessController:
                     error=("MOTION_STOPPED", "movement was stopped by request")
                 )
             if command == "motion.absolute":
+                pan = self._float(params, "pan", required=False, minimum=0, maximum=359.99)
+                tilt = self._float(params, "tilt", required=False, minimum=-60, maximum=60)
+                if pan is None and tilt is None:
+                    raise HeadlessApiError("INVALID_PARAMS", "pan or tilt is required")
+                self._tracker = None
+                self._finish_pending_motion(
+                    error=("MOTION_STOPPED", "movement was superseded by a new target")
+                )
                 # Absolute motion supersedes continuous manual JOG.
                 self._jog_next_resend = 0.0
                 self._active_jog = None
@@ -1347,23 +1402,60 @@ class HeadlessController:
                 self._active_jog = None
                 self._jog_owner_client_id = None
                 self._tracker = None
+                self._finish_pending_motion(
+                    error=("MOTION_STOPPED", "movement was superseded by another motion mode")
+                )
                 for setter in (set_position_speed, set_scan_speed, set_cruise_speed):
                     self.send(setter(self._address, AUTO_PAN_SPEED, AUTO_TILT_SPEED))
-            if command == "laser.arm" and not self._bool(params, "enabled"):
-                if self.laser_connected:
-                    self._laser_write_coil(False)
-                self.laser_on = False
-                self._laser_deadline = 0.0
-            if command == "laser.off":
-                self._laser_deadline = 0.0
-            if command == "laser.on":
-                self._laser_deadline = 0.0
+            if command in {"maintenance.restart", "maintenance.factory_default", "maintenance.self_check", "pelco.remote_reset", "zero.set"}:
+                self._require_confirm(params)
+                if self._tracker is not None or self._active_jog is not None:
+                    self.send(stop(self._address), wait_ms=80)
+                self._home_valid = False
+                self._tracker = None
+                self._jog_next_resend = 0.0
+                self._active_jog = None
+                self._jog_owner_client_id = None
+                self._finish_pending_motion(
+                    error=("MOTION_STOPPED", "device reference was reset by request")
+                )
+                self.motion_state = "stopped"
+            if command == "laser.arm":
+                enabled = self._bool(params, "enabled")
+                with self._laser_lock:
+                    if not enabled:
+                        self.laser_armed = False
+                        if self.laser_connected:
+                            try:
+                                self._laser_write_coil(False)
+                            except HeadlessApiError:
+                                self._laser_deadline = time.monotonic() + 0.2
+                                raise
+                        self.laser_on = False
+                        self._laser_deadline = 0.0
+                    return self._command_impl(command, params)
+            if command in {"laser.off", "laser.on"}:
+                with self._laser_lock:
+                    try:
+                        result = self._command_impl(command, params)
+                    except HeadlessApiError:
+                        if self.laser_connected:
+                            self._laser_deadline = time.monotonic() + 0.2
+                        raise
+                    self._laser_deadline = 0.0
+                    return result
             if command == "laser.pulse":
                 if not self.laser_armed:
                     raise HeadlessApiError("LASER_NOT_ARMED", "Enable ARM first")
                 duration = self._int(params, "duration_ms", 500, minimum=50, maximum=60000)
-                result = self._laser_write_coil(True)
-                self._laser_deadline = time.monotonic() + duration / 1000
+                with self._laser_lock:
+                    self._laser_deadline = time.monotonic() + duration / 1000
+                    try:
+                        result = self._laser_write_coil(True)
+                    except HeadlessApiError:
+                        # ON can reach the relay even when its reply is lost.
+                        self._laser_deadline = time.monotonic() + 0.2
+                        raise
                 return {**result, "duration_ms": duration}
             if command == "motion.completion_config" and "tolerance_deg" in params:
                 self._float(params, "tolerance_deg", minimum=0.01, maximum=10)
@@ -1395,6 +1487,16 @@ class HeadlessController:
                 }
                 result = {**result, "motion_id": self._pending_motion["motion_id"]}
             if force_stop:
+                with self._laser_lock:
+                    if self.laser_connected:
+                        try:
+                            self._laser_write_coil(False)
+                        except HeadlessApiError:
+                            self._laser_deadline = time.monotonic() + 0.2
+                            raise
+                    else:
+                        self.laser_on = False
+                    self._laser_deadline = 0.0
                 result = {**result, "completed": True, "stopped": True}
             return result
 
