@@ -902,6 +902,13 @@ $('ports').onclick =
 $('savePortSettings').onclick =
     guarded(savePortSettings);
 
+let laserSettingsDirty = false;
+$('laserBypass').oninput = () => { laserSettingsDirty = true; };
+$('saveLaserSettings').onclick = guarded(async () => {
+    await cmd('laser.settings', {bypass: $('laserBypass').checked});
+    laserSettingsDirty = false;
+});
+
 
 $('connect').onclick =
     guarded(
@@ -1316,6 +1323,11 @@ async function refreshOnce()
 
                 if ($('laserState'))
                 {
+                    if (!laserSettingsDirty)
+                    {
+                        $('laserBypass').checked = Boolean(status.laser.bypass);
+                    }
+                    $('laserBypassState').textContent = status.laser.bypass ? '바이패스 / 출력 차단' : '사용';
                     $('laserState').textContent =
                         (
                             status.laser.armed

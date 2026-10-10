@@ -17,6 +17,8 @@
     <main>
         <section id="connectionPage" class="page" hidden>
             <h2>PT503 포트·연결</h2>
+            <div class="fields"><label><input id="laserBypass" type="checkbox">레이저 바이패스</label><button id="saveLaserSettings">레이저 설정 저장</button><output id="laserBypassState">사용</output></div>
+            <p>바이패스에서는 레이저 ARM·ON·펄스를 차단하며, Core의 레이저 미연결 통신 알람을 해제합니다. 설정은 서버 재시작 후에도 유지됩니다.</p>
             <section class="connection"><label>포트<select id="port"></select></label><button id="ports"
                     title="포트 새로고침">↻</button><label>Baud<select id="baud">
                         <option>2400</option>

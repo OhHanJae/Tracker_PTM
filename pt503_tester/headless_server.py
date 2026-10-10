@@ -107,6 +107,7 @@ LASER_DEFAULT_ADDRESS = 0x01
 LASER_COIL_ADDRESS = 0x0000
 LASER_RESPONSE_TIMEOUT_S = 0.35
 LASER_API_COMMANDS = {
+    'laser.settings',
     'laser.serial_connect',
     'laser.serial_disconnect',
     'laser.status',
@@ -172,6 +173,7 @@ class HeadlessController:
         self.completion_config = {"tolerance_deg": 0.2, "stable_samples": 3, "timeout_s": 30}
         self.monitor_config = {"enabled": False, "interval_ms": 500}
         self.laser_armed = False
+        self.laser_bypass = False
         self.laser_on = False
         self.aux_number = 1
         self._jog_next_resend = 0.0
@@ -301,6 +303,9 @@ class HeadlessController:
             payload = json.loads(self._settings_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return
+        laser_settings = payload.get("laser") if isinstance(payload, dict) else None
+        if isinstance(laser_settings, dict) and isinstance(laser_settings.get("bypass"), bool):
+            self.laser_bypass = laser_settings["bypass"]
         serial_settings = payload.get("serial") if isinstance(payload, dict) else None
         if not isinstance(serial_settings, dict):
             return
@@ -350,6 +355,7 @@ class HeadlessController:
     def _save_settings(self) -> None:
         payload = {
             "version": 1,
+            "laser": {"bypass": self.laser_bypass},
             "serial": {
                 "port": self._port,
                 "baudrate": self._baudrate,
@@ -641,6 +647,11 @@ class HeadlessController:
 
     def _laser_write_coil(self, enabled: bool) -> dict[str, Any]:
         """Arduino Modbus Function 0x05, Coil 0 = relay/laser ON/OFF."""
+        if enabled and self.laser_bypass:
+            raise HeadlessApiError("LASER_BYPASSED", "Laser output is disabled by bypass mode")
+        if not enabled and self.laser_bypass and not self.laser_connected:
+            self.laser_on = False
+            return {"connected": False, "laser_on": False, "bypass": True}
         value = 0xFF00 if enabled else 0x0000
         payload = bytes((
             self._laser_address,
@@ -765,6 +776,7 @@ class HeadlessController:
                     "health_misses": self._health_misses,
                 },
                 "laser": {
+                    "bypass": self.laser_bypass,
                     "armed": self.laser_armed,
                     "on": self.laser_on,
                     "connected": self.laser_connected,
@@ -1423,6 +1435,8 @@ class HeadlessController:
             if command == "laser.arm":
                 enabled = self._bool(params, "enabled")
                 with self._laser_lock:
+                    if enabled and self.laser_bypass:
+                        raise HeadlessApiError("LASER_BYPASSED", "Laser output is disabled by bypass mode")
                     if not enabled:
                         self.laser_armed = False
                         if self.laser_connected:
@@ -1503,6 +1517,27 @@ class HeadlessController:
     def _command_impl(self, command: str, params: dict[str, Any]) -> dict[str, Any]:
         if command == "system.ping":
             return {"protocol": PROTOCOL_NAME, "version": PROTOCOL_VERSION, "time": time.time()}
+        if command == "laser.settings":
+            enabled = self._bool(params, "bypass")
+            with self._laser_lock:
+                if enabled:
+                    self.laser_armed = False
+                    if self.laser_connected:
+                        try:
+                            self._laser_write_coil(False)
+                        except HeadlessApiError:
+                            self._laser_deadline = time.monotonic() + 0.2
+                            raise
+                    self.laser_on = False
+                    self._laser_deadline = 0.0
+                previous = self.laser_bypass
+                self.laser_bypass = enabled
+                try:
+                    self._save_settings()
+                except OSError:
+                    self.laser_bypass = previous
+                    raise
+                return {"bypass": self.laser_bypass, "armed": self.laser_armed, "laser_on": self.laser_on}
         if command == "system.status":
             return self.status()
         if command == "system.commands":
@@ -1998,6 +2033,8 @@ class HeadlessController:
         if command == "laser.off":
             return self._laser_write_coil(False)
         if command == "laser.status":
+            if self.laser_bypass and not self.laser_connected:
+                return {"bypass": True, "connected": False, "laser_on": False}
             return self._laser_read_coil()
         if command == "laser.pulse":
             # Normally handled in command() so OFF can be performed by the watchdog.
