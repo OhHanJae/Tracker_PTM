@@ -1706,7 +1706,7 @@ function sleep(ms)
 }
 
 
-async function waitForRecipeMotion(point)
+async function waitForRecipeMotion(point, motionId)
 {
     const completion =
         status.motion?.completion || {};
@@ -1728,26 +1728,37 @@ async function waitForRecipeMotion(point)
         Date.now() < deadline
     )
     {
-        await sleep(150);
-
         // 순차 테스트에서는 단발 조회만 수행한다.
         // refresh()를 호출하면 700ms 자동 갱신 타이머가 계속 추가될 수 있으므로
         // 반드시 refreshOnce()를 사용한다.
         await refreshOnce();
 
-
-        const state =
-            status.motion?.state || '';
+        if (recipeTestAbort) return;
+        const motion = status.motion;
+        if (!motion) throw Error('이동 상태를 확인할 수 없습니다.');
+        if (motion.failed_id === motionId || ['fault', 'timeout', 'stopped'].includes(motion.state))
+        {
+            throw Error(motion.last_error || '포인트 이동이 중단되었습니다.');
+        }
 
 
         if (
-            state &&
-            state !== 'tracking' &&
-            state !== 'jog'
+            motion.completed_id === motionId
         )
         {
             break;
         }
+        if (motion.id && motion.id !== motionId)
+        {
+            throw Error('다른 이동 명령이 포인트 테스트를 대체했습니다.');
+        }
+        await sleep(50);
+    }
+
+    if (recipeTestAbort) return;
+    if (status.motion?.completed_id !== motionId)
+    {
+        throw Error('포인트 이동 완료 확인 시간이 초과되었습니다.');
     }
 
 
@@ -1760,7 +1771,11 @@ async function waitForRecipeMotion(point)
 
     if (dwellMs)
     {
-        await sleep(dwellMs);
+        const dwellDeadline = Date.now() + dwellMs;
+        while (!recipeTestAbort && Date.now() < dwellDeadline)
+        {
+            await sleep(Math.min(50, dwellDeadline - Date.now()));
+        }
     }
 }
 
@@ -1777,7 +1792,7 @@ async function moveRecipeTestPoint(recipe, point, label)
     setRecipeTestStatus(label + ' · ' + pointLabel(point));
 
 
-    await cmd(
+    const result = await cmd(
         'point.goto',
 
         {
@@ -1790,7 +1805,8 @@ async function moveRecipeTestPoint(recipe, point, label)
     );
 
 
-    await waitForRecipeMotion(point);
+    if (!result.motion_id) throw Error('포인트 이동 ID를 받지 못했습니다.');
+    await waitForRecipeMotion(point, result.motion_id);
 }
 
 

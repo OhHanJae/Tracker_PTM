@@ -96,6 +96,8 @@ MAX_TCP_LINE_BYTES = 65_536
 JOG_RESEND_INTERVAL_S = 3.5
 PELCO_MIN_COMMAND_GAP_S = 0.32
 PELCO_ABSOLUTE_AXIS_GAP_S = 0.05
+PELCO_POSITION_QUERY_GAP_S = 0.05
+MOTION_FEEDBACK_POLL_S = 0.2
 
 PROTOCOL_NAME = 'PT503-Control'
 PROTOCOL_VERSION = '1.0'
@@ -187,6 +189,7 @@ class HeadlessController:
         # status/health client disconnect must never stop somebody else's JOG.
         self._jog_owner_client_id: str | None = None
         self._last_serial_tx_at = 0.0
+        self._position_speed_frame: bytes | None = None
         self._laser_deadline = 0.0
         self._health_misses = 0
         self._tracker = None
@@ -436,13 +439,29 @@ class HeadlessController:
                     # Never interleave position/health queries with continuous
                     # manual motion.  Extra commands can make PT heads hesitate.
                     if not jogging:
+                        pan_feedback = None
                         if now >= next_poll and (self.monitor_config["enabled"] or self._tracker):
-                            self.send(query_pan(self._address), wait_ms=80)
-                            self.send(query_tilt(self._address), wait_ms=80)
-                            poll_interval_ms = 250 if self._tracker else self.monitor_config["interval_ms"]
-                            next_poll = time.monotonic() + poll_interval_ms / 1000
+                            tracking = self._tracker is not None
+                            # Only feedback queries use the shorter gap and finish
+                            # early on a validated response; control commands keep 320ms.
+                            if tracking:
+                                pan_feedback = self.send(
+                                    query_pan(self._address), wait_ms=80,
+                                    min_gap_s=PELCO_POSITION_QUERY_GAP_S, response_kind="pan",
+                                )
+                                self.send(
+                                    query_tilt(self._address), wait_ms=80,
+                                    min_gap_s=PELCO_POSITION_QUERY_GAP_S, response_kind="tilt",
+                                )
+                            else:
+                                self.send(query_pan(self._address), wait_ms=80)
+                                self.send(query_tilt(self._address), wait_ms=80)
+                            next_poll = (
+                                now + MOTION_FEEDBACK_POLL_S if tracking
+                                else time.monotonic() + self.monitor_config["interval_ms"] / 1000
+                            )
                         if now >= next_health:
-                            health_rx = self.send(query_pan(self._address), wait_ms=80)
+                            health_rx = pan_feedback if pan_feedback is not None else self.send(query_pan(self._address), wait_ms=80)
                             if health_rx:
                                 self._health_misses = 0
                             else:
@@ -743,6 +762,7 @@ class HeadlessController:
             self._serial = None
             self._health_misses = 0
             self._last_serial_tx_at = 0.0
+            self._position_speed_frame = None
             self.current_pan = self.current_tilt = None
             self._home_valid = False
             self._rx_buffer.clear()
@@ -1005,6 +1025,7 @@ class HeadlessController:
         *,
         wait_ms: int = 80,
         min_gap_s: float | None = None,
+        response_kind: str | None = None,
     ) -> list[dict[str, Any]]:
         with self._lock:
             if not self.connected or self._serial is None:
@@ -1030,10 +1051,16 @@ class HeadlessController:
                 if self._last_serial_tx_at and remaining > 0:
                     time.sleep(remaining)
 
+                position_speed = command.data[2:4] == b"\x00\x5f"
+                if (position_speed or command.category in {"raw", "device", "maintenance"}
+                        or command.data[2:6] in {b"\x00\x03\x00\x61", b"\x00\x05\x00\x61"}):
+                    self._position_speed_frame = None
                 self._serial.write(command.data)
                 self._serial.flush()
 
                 self._last_serial_tx_at = time.monotonic()
+                if position_speed:
+                    self._position_speed_frame = bytes(command.data)
 
                 self.last_tx = {
                     "hex": frame_to_hex(command.data),
@@ -1044,14 +1071,19 @@ class HeadlessController:
 
                 deadline = time.perf_counter() + wait_ms / 1000.0
                 received = bytearray()
+                decoded = []
 
                 while time.perf_counter() < deadline:
                     count = self._serial.in_waiting
 
                     if count:
-                        received.extend(
-                            self._serial.read(count)
-                        )
+                        chunk = self._serial.read(count)
+                        if response_kind is not None:
+                            decoded.extend(self._decode_blob(chunk, command.data[6]))
+                            if any(frame["kind"] == response_kind for frame in decoded):
+                                break
+                        else:
+                            received.extend(chunk)
 
                     time.sleep(0.005)
 
@@ -1062,10 +1094,8 @@ class HeadlessController:
                     str(exc),
                 ) from exc
 
-            decoded = self._decode_blob(
-                bytes(received),
-                command.data[6],
-            )
+            if response_kind is None:
+                decoded = self._decode_blob(bytes(received), command.data[6])
 
             self.last_rx.extend(decoded)
             self.last_rx = self.last_rx[-50:]
@@ -1547,6 +1577,7 @@ class HeadlessController:
         if command == "serial.ports":
             return {"ports": self.ports()}
         if command == "serial.settings":
+            self._position_speed_frame = None
             self._port = str(params.get("port", self._port))
             self._baudrate = self._int(
                 params, "baudrate", self._baudrate, minimum=1200, maximum=115200
@@ -1729,28 +1760,13 @@ class HeadlessController:
             # --------------------------------------------------------
 
             if "pan_speed" in params or "tilt_speed" in params:
-                rx.extend(
-                    self.send(
-                        set_position_speed(
-                            self._address,
-                            self._int(
-                                params,
-                                "pan_speed",
-                                32,
-                                minimum=0,
-                                maximum=63,
-                            ),
-                            self._int(
-                                params,
-                                "tilt_speed",
-                                32,
-                                minimum=0,
-                                maximum=63,
-                            ),
-                        ),
-                        wait_ms=80,
-                    )
+                speed_command = set_position_speed(
+                    self._address,
+                    self._int(params, "pan_speed", 32, minimum=0, maximum=63),
+                    self._int(params, "tilt_speed", 32, minimum=0, maximum=63),
                 )
+                if self._position_speed_frame != speed_command.data:
+                    rx.extend(self.send(speed_command, wait_ms=80))
 
             # --------------------------------------------------------
             # Pan + Tilt 동시 이동
@@ -1967,6 +1983,8 @@ class HeadlessController:
             built = build_named_protocol_command(self._address, command, params)
             if built.requires_confirm:
                 self._require_confirm(params)
+            if command == "protocol.command":
+                self._position_speed_frame = None
             rx = []
             for item in built.commands:
                 rx.extend(self.send(item, wait_ms=built.wait_ms))
