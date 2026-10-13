@@ -2414,10 +2414,12 @@ class HeadlessTcpServer(socketserver.ThreadingTCPServer):
 
 class TcpJsonHandler(socketserver.StreamRequestHandler):
     server: HeadlessTcpServer
+    _CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 
     def setup(self) -> None:
         super().setup()
         self._write_lock = threading.Lock()
+        self._disconnected = False
         self.client_id = self.server.next_client_id()
         self.server.register(self)
         self._send_json(
@@ -2438,8 +2440,12 @@ class TcpJsonHandler(socketserver.StreamRequestHandler):
         self.send_event("home.state_changed", {"state": states["home"]})
 
     def handle(self) -> None:
-        while True:
-            raw_line = self.rfile.readline(MAX_TCP_LINE_BYTES + 1)
+        while not self._disconnected:
+            try:
+                raw_line = self.rfile.readline(MAX_TCP_LINE_BYTES + 1)
+            except self._CLIENT_DISCONNECT_ERRORS:
+                self._disconnected = True
+                return
             if not raw_line:
                 return
             if len(raw_line) > MAX_TCP_LINE_BYTES:
@@ -2525,8 +2531,13 @@ class TcpJsonHandler(socketserver.StreamRequestHandler):
     def _send_json(self, message: dict[str, Any]) -> None:
         text = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
         with self._write_lock:
-            self.wfile.write((text + "\n").encode("utf-8"))
-            self.wfile.flush()
+            if self._disconnected:
+                return
+            try:
+                self.wfile.write((text + "\n").encode("utf-8"))
+                self.wfile.flush()
+            except self._CLIENT_DISCONNECT_ERRORS:
+                self._disconnected = True
 
     @staticmethod
     def _timestamp() -> str:
