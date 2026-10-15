@@ -203,7 +203,7 @@ Auto Home 대기시간 명령은 제공된 명령표에서 값의 단위와 매�
 
 레이저 탭은 Pelco-D AUX ON/OFF를 레이저 제어 채널로 사용합니다.
 
-- 레이저 출력 허용(ARM) 후 ON/OFF 가능
+- ARM/DISARM 없이 ON/OFF 가능 (배포용 GPIO 서버 동작은 아래 RDK 절 참고)
 - 50ms~60초 펄스 시험
 - 연결 해제와 프로그램 종료 시 AUX OFF 우선 전송
 - 화면의 ON/OFF는 출력 피드백이 아니라 마지막 송신 명령 기준
@@ -222,7 +222,7 @@ PT503 사진의 배선만으로 실제 AUX 출력 단자는 확인되지 않습�
 | A | 즉시 Pan/Tilt STOP |
 | B | 현재 Pan/Tilt 조회 |
 | X | 미사용 |
-| Y | 레이저 펄스, Laser ARM 필요 |
+| Y | 구형 GUI는 레이저 펄스, 웹은 ON/OFF 토글 |
 | LB/RB | 미사용 |
 | Back | 레이저 OFF |
 | Start | 위치 자동 모니터링 ON/OFF |
@@ -294,7 +294,8 @@ ruff check .
 ### RDK X5 GPIO 레이저 (2026-10-15)
 
 레이저 기본 backend는 `Hobot.GPIO`, BOARD 물리 핀 **31**, HIGH=ON / LOW=OFF입니다.
-PTM 서버만 핀을 소유하며 초기화·종료 시 LOW를 출력합니다. 기존 레이저 ARM/ON/OFF/pulse API는 유지합니다.
+PTM 서버만 핀을 소유하며 초기화·종료 시 LOW를 출력합니다. `laser.on {}` / `laser.off {}`로 제어하며 ARM/DISARM은 제거했습니다.
+웹 레이저 탭은 ON/OFF와 바이패스를 제공합니다. 기존 pulse API는 호환용으로 유지하지만 ARM을 요구하지 않습니다.
 포인트 이동은 먼저 OFF하고 위치 feedback으로 완료된 뒤 허가된 출력만 ON합니다.
 GPIO 라이브러리/핀 설정 실패는 상태의 `laser.error`와 `connected=false`로 보고합니다.
 Windows에서는 GPIO를 에뮬레이션하지 않습니다. 관련 테스트는 `tests/test_gpio_laser.py`의 mock을 사용합니다.
@@ -303,8 +304,8 @@ RDK의 실제 실행 Python에서 `import Hobot.GPIO`가 가능해야 합니다.
 기존 venv는 필요하면 `python3 -m venv --system-site-packages .venv-linux`로 갱신합니다.
 GPIO 모드에서는 Arduino serial 연결을 받지 않습니다. 명시적으로 저장된 `laser.backend=modbus`만 구형 RS485 경로를 유지합니다.
 
-`laser.power_save {"enabled":true}`는 자동 출력 OFF·ARM 해제·예약 ON 취소와 ON 차단을 수행합니다.
-명시적인 `laser.on {"manual":true}`는 자동 OFF/절전 중에도 ON 시점부터 최대 1800초 허용합니다.
+`laser.power_save {"enabled":true}`는 자동 출력 OFF·예약 ON 취소와 자동 ON 차단을 수행합니다.
+명시적인 `laser.on {}`는 자동 OFF/절전 중에도 ON 시점부터 최대 1800초 허용합니다.
 다음 이동·Jog·원점·정지 등 장치 제어 또는 시간 만료 시 OFF하고 자동 모드로 돌아갑니다.
 상태 조회/화면 전환은 수동 시간을 연장하지 않습니다. Core의 FORCE_STOP/Fault/바이패스는 우선합니다.
 절전 명령의 `automatic_off` / `manual_allowed`는 유효 수동 상태 보존과 강제 차단을 구분합니다.
@@ -314,6 +315,9 @@ PTM 웹/HTTP/TCP `power_save.wake`는 Core TCP에 전달합니다.
 이 환경변수는 PTM 자신의 TCP bind 주소인 `PT503_TCP_HOST/PORT`와 별개입니다.
 전체 계약은 Monitor `docs/Tracker_Monitor_구현_지침서.md` 16절에 있습니다.
 
-추가 확정된 수동 동작과 GPIO 알람 변경은 같은 지침서 17절에 있습니다.
-PTM 웹 레이저 바이패스는 레이저 탭에 있습니다. 레이저 통신 알람 D+67.0/5001은 사용하지 않으며,
-GPIO 초기화/출력/readback 오류는 D+67.2/5003으로 보고합니다.
+추가 확정된 ON/OFF 전용 동작과 검출 없는 상태 계약은 같은 지침서 18절에 있습니다.
+GPIO 입력/readback은 읽지 않습니다. `on`은 마지막 성공한 GPIO 명령이며 실제 광 방출 검출값이 아닙니다.
+상태에 `feedback_available=false`, `on_source=commanded_gpio_level`을 제공하고 armed 필드는 없습니다.
+PTM 웹 레이저 바이패스는 레이저 탭에 있습니다. PLC D+66/D+67과 레이저 경고/고장 요약,
+대표 코드 5000~5099는 Reserved/0입니다. GPIO 초기화/쓰기 오류는 API 오류·상태 진단·로그로 보고하며
+출력 검출 알람을 만들지 않습니다. OFF 쓰기 실패 시 이동을 막고 모터 STOP은 별도로 시도합니다.

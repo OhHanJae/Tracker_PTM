@@ -210,18 +210,15 @@
             <pre id="padValues"></pre>
         </section>
         <section id="laser" class="page" hidden>
-            <h2>레이저 모듈</h2><output id="laserState">OFF</output>
+            <h2>레이저 모듈</h2><output id="laserState">GPIO 명령 미확인</output>
             <div class="fields"><label><input id="laserBypass" type="checkbox">레이저 바이패스</label><button id="saveLaserSettings">레이저 설정 저장</button><output id="laserBypassState">사용</output></div>
             <p>바이패스에서는 레이저 출력을 차단합니다. 설정은 서버 재시작 후에도 유지됩니다.</p>
             <p>RDK X5 물리 핀 31 · HIGH=ON / LOW=OFF. 포인트 이동 중 OFF, 실제 완료 후 허가된 출력만 ON.</p>
+            <p>표시는 마지막 GPIO 명령 상태입니다. 레이저 출력 검출 기능은 없습니다.</p>
             <p>수동 ON은 자동 OFF·절전 중에도 최대 30분 허용합니다. 이동·Jog·원점·정지 등 다음 장치 제어 명령에서 OFF 후 자동으로 복귀합니다.</p>
             <div class="toolbar">
-                <button data-command="laser.arm" data-params='{"enabled":true}'>ARM</button>
-                <button data-command="laser.arm" data-params='{"enabled":false}'>ARM 해제</button>
-                <button data-command="laser.on" data-params='{"manual":true}'>수동 ON · 최대 30분</button><button data-command="laser.off">OFF / 자동 복귀</button>
+                <button data-command="laser.on">ON</button><button data-command="laser.off">OFF</button>
             </div>
-            <form id="pulse"><label>펄스 ms<input name="duration_ms" type="number" min="50" max="60000"
-                        value="500"></label><button>펄스 출력</button></form>
         </section>
         <section id="protocol" class="page" hidden>
             <h2>프로토콜 / API</h2>

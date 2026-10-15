@@ -10,6 +10,7 @@ class GpioLaser:
     def __init__(self, gpio=None) -> None:
         self._gpio = gpio
         self.connected = False
+        self._on = False
 
     def open(self) -> None:
         if self.connected:
@@ -19,28 +20,26 @@ class GpioLaser:
         gpio.setmode(gpio.BOARD)
         gpio.setup(self.pin, gpio.OUT, initial=gpio.LOW)
         self.connected = True
-        if self.read():
-            self.close()
-            raise OSError("GPIO BOARD 31 did not initialize LOW")
+        self._on = False
 
     def read(self) -> bool:
+        """Last successfully requested level; this laser has no feedback input."""
         if not self.connected:
             raise OSError("GPIO BOARD 31 is not initialized")
-        return bool(self._gpio.input(self.pin))
+        return self._on
 
     def write(self, enabled: bool) -> bool:
         if not self.connected:
             raise OSError("GPIO BOARD 31 is not initialized")
         self._gpio.output(self.pin, self._gpio.HIGH if enabled else self._gpio.LOW)
-        actual = self.read()
-        if actual != enabled:
-            raise OSError("GPIO BOARD 31 output readback mismatch")
-        return actual
+        self._on = bool(enabled)
+        return self._on
 
     def close(self) -> None:
         if self.connected:
             try:
                 self._gpio.output(self.pin, self._gpio.LOW)
+                self._on = False
             finally:
                 self._gpio.cleanup(self.pin)
                 self.connected = False

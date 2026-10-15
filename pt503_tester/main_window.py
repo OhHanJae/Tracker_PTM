@@ -1419,8 +1419,6 @@ class MainWindow(QMainWindow):
 
         laser_group = QGroupBox("레이저 안전 제어 (Pelco-D AUX 매핑)")
         laser_layout = QGridLayout(laser_group)
-        self.laser_arm = QCheckBox("레이저 출력 허용(ARM)")
-        self.laser_arm.toggled.connect(self._laser_arm_changed)
         self.aux_number = QSpinBox()
         self.aux_number.setRange(1, 255)
         self.aux_number.setValue(1)
@@ -1432,16 +1430,13 @@ class MainWindow(QMainWindow):
         self.laser_on_button = QPushButton("레이저 ON")
         self.laser_on_button.setObjectName("danger")
         self.laser_on_button.clicked.connect(self._laser_on)
-        self.laser_on_button.setEnabled(False)
         self.laser_off_button = QPushButton("레이저 OFF")
         self.laser_off_button.clicked.connect(self._laser_off)
         self.laser_pulse_button = QPushButton("설정 시간만 펄스")
         self.laser_pulse_button.clicked.connect(self._laser_pulse)
-        self.laser_pulse_button.setEnabled(False)
         self.laser_state_label = QLabel("출력 상태: OFF (앱 추정)")
         self.laser_state_label.setStyleSheet("color:#75e09a; font-weight:700")
 
-        laser_layout.addWidget(self.laser_arm, 0, 0, 1, 3)
         laser_layout.addWidget(QLabel("AUX 스위치 번호"), 1, 0)
         laser_layout.addWidget(self.aux_number, 1, 1)
         laser_layout.addWidget(QLabel("펄스 시간"), 2, 0)
@@ -1543,7 +1538,7 @@ class MainWindow(QMainWindow):
         feature_layout.addWidget(
             self._help_label(
                 "유지보수와 raw.send는 params.confirm=true가 있어야 실행됩니다. "
-                "레이저 ON/펄스는 먼저 laser.arm을 켜야 합니다. API 요청과 응답은 오른쪽 통신 로그에 기록됩니다."
+                "레이저는 ON/OFF로 제어합니다. API 요청과 응답은 오른쪽 통신 로그에 기록됩니다."
             )
         )
         layout.addWidget(feature_group)
@@ -2547,16 +2542,8 @@ class MainWindow(QMainWindow):
             )
             return {"accepted": True, "action": action}
 
-        if command == "laser.arm":
-            enabled = self._api_bool(params, "enabled")
-            self.laser_arm.setChecked(enabled)
-            return {"armed": self.laser_arm.isChecked(), "laser_on": self.laser_is_on}
         if command == "laser.on":
             self._api_require_connected()
-            if not self.laser_arm.isChecked():
-                raise ApiCommandError(
-                    "LASER_NOT_ARMED", "먼저 laser.arm을 활성화하세요."
-                )
             if self.api_laser_owner not in (None, client_id) and self.laser_is_on:
                 raise ApiCommandError(
                     "BUSY", "다른 클라이언트가 레이저를 제어 중입니다."
@@ -2570,10 +2557,6 @@ class MainWindow(QMainWindow):
             return {"accepted": True, "laser_on": self.laser_is_on}
         if command == "laser.pulse":
             self._api_require_connected()
-            if not self.laser_arm.isChecked():
-                raise ApiCommandError(
-                    "LASER_NOT_ARMED", "먼저 laser.arm을 활성화하세요."
-                )
             if self.api_laser_owner not in (None, client_id) and self.laser_is_on:
                 raise ApiCommandError(
                     "BUSY", "다른 클라이언트가 레이저를 제어 중입니다."
@@ -2678,7 +2661,6 @@ class MainWindow(QMainWindow):
                 "completion": self._api_completion_config(),
             },
             "laser": {
-                "armed": self.laser_arm.isChecked(),
                 "on": self.laser_is_on,
                 "aux_number": self.aux_number.value(),
             },
@@ -3452,10 +3434,6 @@ class MainWindow(QMainWindow):
             self._laser_off()
             self.gamepad_status.setText("Laser OFF")
             return
-        if not self.laser_arm.isChecked():
-            self.gamepad_status.setText("Laser ARM required")
-            self.gamepad_manager.rumble(0.2, 0.2, 120)
-            return
         self._laser_on()
         self.gamepad_status.setText("Laser ON")
 
@@ -4110,26 +4088,7 @@ class MainWindow(QMainWindow):
             self.preset_store.delete(self._address(), number)
             self._update_preset_display()
 
-    def _laser_arm_changed(self, armed: bool) -> None:
-        self.laser_on_button.setEnabled(armed)
-        self.laser_pulse_button.setEnabled(armed)
-        if not armed and self.laser_is_on:
-            self._laser_off()
-        self.api_server.broadcast(
-            "laser.state",
-            {
-                "armed": armed,
-                "on": self.laser_is_on,
-                "aux_number": self.aux_number.value(),
-            },
-        )
-
     def _laser_on(self) -> None:
-        if not self.laser_arm.isChecked():
-            self.statusBar().showMessage(
-                "레이저 출력 허용(ARM)을 먼저 선택하세요.", 3000
-            )
-            return
         self.laser_timer.stop()
         if self._send(set_auxiliary(self._address(), self.aux_number.value(), True)):
             self.laser_is_on = True
@@ -4138,7 +4097,6 @@ class MainWindow(QMainWindow):
             self.api_server.broadcast(
                 "laser.state",
                 {
-                    "armed": self.laser_arm.isChecked(),
                     "on": True,
                     "aux_number": self.aux_number.value(),
                     "owner": self.api_laser_owner,
@@ -4155,7 +4113,6 @@ class MainWindow(QMainWindow):
             self.api_server.broadcast(
                 "laser.state",
                 {
-                    "armed": self.laser_arm.isChecked(),
                     "on": False,
                     "aux_number": self.aux_number.value(),
                 },

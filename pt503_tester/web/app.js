@@ -785,10 +785,6 @@ bindForm(
     'motion.completion_config'
 );
 
-bindForm(
-    'pulse',
-    'laser.pulse'
-);
 
 
 // ============================================================================
@@ -1328,13 +1324,7 @@ async function refreshOnce()
                         $('laserBypass').checked = Boolean(status.laser.bypass);
                     }
                     $('laserBypassState').textContent = status.laser.bypass ? '바이패스 / 출력 차단' : (status.laser.backend === 'gpio' ? 'GPIO BOARD 31' : 'RS485');
-                    $('laserState').textContent =
-                        (
-                            status.laser.armed
-                                ? 'ARM / '
-                                : 'DISARM / '
-                        )
-                        +
+                    $('laserState').textContent = 'GPIO 명령: ' +
                         (
                             status.laser.on
                                 ? 'ON'
@@ -7284,7 +7274,6 @@ function renderGamepadMonitor(
 
         '[레이저]',
 
-        `ARM                     : ${status.laser?.armed ? 'ON' : 'OFF'}`,
 
         `Laser                   : ${status.laser?.on ? 'ON' : 'OFF'}`,
 
