@@ -303,9 +303,17 @@ RDK의 실제 실행 Python에서 `import Hobot.GPIO`가 가능해야 합니다.
 기존 venv는 필요하면 `python3 -m venv --system-site-packages .venv-linux`로 갱신합니다.
 GPIO 모드에서는 Arduino serial 연결을 받지 않습니다. 명시적으로 저장된 `laser.backend=modbus`만 구형 RS485 경로를 유지합니다.
 
-`laser.power_save {"enabled":true}`는 OFF·ARM 해제·예약 ON 취소와 ON 차단을 수행합니다.
-false는 차단만 해제하며 켜지지 않습니다. Core가 30분 PLC 무요청 정책을 관리합니다.
+`laser.power_save {"enabled":true}`는 자동 출력 OFF·ARM 해제·예약 ON 취소와 ON 차단을 수행합니다.
+명시적인 `laser.on {"manual":true}`는 자동 OFF/절전 중에도 ON 시점부터 최대 1800초 허용합니다.
+다음 이동·Jog·원점·정지 등 장치 제어 또는 시간 만료 시 OFF하고 자동 모드로 돌아갑니다.
+상태 조회/화면 전환은 수동 시간을 연장하지 않습니다. Core의 FORCE_STOP/Fault/바이패스는 우선합니다.
+절전 명령의 `automatic_off` / `manual_allowed`는 유효 수동 상태 보존과 강제 차단을 구분합니다.
+false는 자동 차단만 해제하며 켜지지 않습니다. Core가 30분 PLC 무요청 정책을 관리합니다.
 PTM 웹/HTTP/TCP `power_save.wake`는 Core TCP에 전달합니다.
 주소 기본값은 127.0.0.1:8000이며 `PT503_CORE_HOST` / `PT503_CORE_PORT` 또는 명령의 host/port로 바꿉니다.
 이 환경변수는 PTM 자신의 TCP bind 주소인 `PT503_TCP_HOST/PORT`와 별개입니다.
 전체 계약은 Monitor `docs/Tracker_Monitor_구현_지침서.md` 16절에 있습니다.
+
+추가 확정된 수동 동작과 GPIO 알람 변경은 같은 지침서 17절에 있습니다.
+PTM 웹 레이저 바이패스는 레이저 탭에 있습니다. 레이저 통신 알람 D+67.0/5001은 사용하지 않으며,
+GPIO 초기화/출력/readback 오류는 D+67.2/5003으로 보고합니다.

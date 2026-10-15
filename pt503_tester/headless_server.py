@@ -167,6 +167,8 @@ class HeadlessController:
         self._laser_error = ""
         self._laser_generation = 0
         self._power_saving = False
+        self._laser_manual_deadline = 0.0
+        self._laser_manual_allowed = True
         self._serial: serial.Serial | None = None
         self._laser_serial: serial.Serial | None = None
         self._laser_port = ''
@@ -419,6 +421,11 @@ class HeadlessController:
     def _laser_service_loop(self) -> None:
         while not self._shutdown.wait(0.04):
             with self._laser_lock:
+                if self._laser_manual_deadline and time.monotonic() >= self._laser_manual_deadline:
+                    try:
+                        self._laser_write_coil(False)
+                    except HeadlessApiError:
+                        self._laser_deadline = time.monotonic() + 0.2
                 if self._laser_deadline and time.monotonic() >= self._laser_deadline:
                     try:
                         self._laser_write_coil(False)
@@ -649,6 +656,7 @@ class HeadlessController:
     def close_laser(self) -> None:
         """Turn the laser OFF if possible, then close only the Arduino RS485 port."""
         with self._laser_lock:
+            self._laser_manual_deadline = 0.0
             self._laser_generation += 1
             if self._laser_backend == "gpio":
                 try:
@@ -721,9 +729,12 @@ class HeadlessController:
         """Write the owned GPIO output, or the explicitly configured legacy relay."""
         if enabled and self.laser_bypass:
             raise HeadlessApiError("LASER_BYPASSED", "Laser output is disabled by bypass mode")
-        if enabled and self._power_saving:
+        if enabled and self._power_saving and not self._laser_manual_deadline:
             raise HeadlessApiError("POWER_SAVING", "Wake Core before enabling laser output")
         if not enabled:
+            if self._laser_manual_deadline:
+                self.laser_armed = False
+                self._laser_manual_deadline = 0.0
             self._laser_generation += 1
         if (not enabled and self.laser_bypass and not self.laser_connected
                 and not (self._laser_backend == "gpio" and self._gpio_laser.connected)):
@@ -736,6 +747,7 @@ class HeadlessController:
             except Exception as exc:
                 self._laser_error = str(exc)
                 self.laser_armed = False
+                self._laser_manual_deadline = 0.0
                 self._laser_deadline = time.monotonic() + 0.2
                 raise HeadlessApiError("LASER_GPIO_IO_FAILED", str(exc)) from exc
             return {"accepted": True, "connected": True, "laser_on": self.laser_on,
@@ -781,6 +793,7 @@ class HeadlessController:
             except Exception as exc:
                 self._laser_error = str(exc)
                 self.laser_armed = False
+                self._laser_manual_deadline = 0.0
                 self._laser_deadline = time.monotonic() + 0.2
                 raise HeadlessApiError("LASER_GPIO_IO_FAILED", str(exc)) from exc
             return {"connected": True, "laser_on": self.laser_on, "backend": "gpio",
@@ -878,6 +891,10 @@ class HeadlessController:
                     "health_misses": self._health_misses,
                 },
                 "laser": {
+                    "control_mode": "manual" if self._laser_manual_deadline else "auto",
+                    "manual_override": bool(self._laser_manual_deadline),
+                    "manual_remaining_s": max(0.0, self._laser_manual_deadline - time.monotonic()) if self._laser_manual_deadline else 0.0,
+                    "manual_allowed": self._laser_manual_allowed,
                     "power_saving": self._power_saving,
                     "backend": self._laser_backend,
                     "numbering": "BOARD" if self._laser_backend == "gpio" else None,
@@ -1283,8 +1300,12 @@ class HeadlessController:
         if command == "laser.power_save":
             with self._laser_lock:
                 enabled = self._bool(params, "enabled")
+                automatic_off = self._bool(params, "automatic_off", False)
+                allowed = self._bool(params, "manual_allowed", self._laser_manual_allowed)
                 self._power_saving = enabled
-                if enabled:
+                self._laser_manual_allowed = allowed
+                preserve_manual = bool(self._laser_manual_deadline and allowed)
+                if (enabled or automatic_off or not allowed) and not preserve_manual:
                     self.laser_armed = False
                     self._laser_generation += 1
                     try:
@@ -1292,7 +1313,8 @@ class HeadlessController:
                     except HeadlessApiError:
                         self._laser_deadline = time.monotonic() + 0.2
                         raise
-                return {"sleeping": enabled, "laser_on": self.laser_on}
+                return {"sleeping": enabled, "laser_on": self.laser_on,
+                        "manual_override": preserve_manual, "manual_allowed": allowed}
         if command == "power_save.wake":
             host = str(params.get("host") or os.environ.get("PT503_CORE_HOST", "127.0.0.1"))
             port = self._int(params, "port", int(os.environ.get("PT503_CORE_PORT", "8000")),
@@ -1386,6 +1408,15 @@ class HeadlessController:
         with self._lock:
             if self._shutdown.is_set():
                 raise HeadlessApiError("SERVICE_STOPPING", "server is shutting down")
+            if (command.startswith(("motion.", "home.", "preset.", "scan.", "cruise.", "pattern.",
+                                    "pelco.", "lens.", "aux.", "camera.", "maintenance.", "zero."))
+                    or command in {"point.goto", "serial.connect", "serial.disconnect", "raw.send"}
+                    or command in set(protocol_named_command_names()) - {"magnification.query", "device.query_diagnostics"}):
+                preserve_manual = (command == "motion.stop" and params.get("preserve_laser_manual") is True)
+                preserve_manual |= command in {"motion.completion_config", "motion.tolerance"} and not params
+                with self._laser_lock:
+                    if self._laser_manual_deadline and not preserve_manual:
+                        self._laser_write_coil(False)
             if (
                 self.scanning
                 and command not in {"system.status", "system.ping", "system.commands", "serial.ports", "serial.scan_cancel"}
@@ -1615,6 +1646,7 @@ class HeadlessController:
                     if enabled and self._power_saving:
                         raise HeadlessApiError("POWER_SAVING", "Wake Core before arming laser")
                     if not enabled:
+                        self._laser_manual_deadline = 0.0
                         self._laser_generation += 1
                         self.laser_armed = False
                         if self.laser_connected or (self._laser_backend == "gpio" and self._gpio_laser.connected):
@@ -1701,6 +1733,7 @@ class HeadlessController:
             enabled = self._bool(params, "bypass")
             with self._laser_lock:
                 if enabled:
+                    self._laser_manual_deadline = 0.0
                     self.laser_armed = False
                     if self.laser_connected or (self._laser_backend == "gpio" and self._gpio_laser.connected):
                         try:
@@ -2203,6 +2236,13 @@ class HeadlessController:
         if command == "laser.on":
             if self._pending_motion is not None:
                 raise HeadlessApiError("MOTION_ACTIVE", "Laser remains OFF until movement completes")
+            if self._bool(params, "manual", False):
+                if not self._laser_manual_allowed:
+                    raise HeadlessApiError("LASER_INTERLOCK", "Core safety interlock blocks manual laser output")
+                if self.laser_bypass:
+                    raise HeadlessApiError("LASER_BYPASSED", "Laser output is disabled by bypass mode")
+                self.laser_armed = True
+                self._laser_manual_deadline = time.monotonic() + 1800.0
             if not self.laser_armed:
                 raise HeadlessApiError("LASER_NOT_ARMED", "laser.arm must be enabled first")
             return self._laser_write_coil(True)

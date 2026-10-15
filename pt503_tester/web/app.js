@@ -1339,7 +1339,8 @@ async function refreshOnce()
                             status.laser.on
                                 ? 'ON'
                                 : 'OFF'
-                        ) + (status.laser.error ? ` / GPIO 오류: ${status.laser.error}` : '');
+                        ) + (status.laser.manual_override ? ` / 수동 ${Math.ceil(status.laser.manual_remaining_s)}초 남음` : ' / 자동')
+                        + (status.laser.error ? ` / GPIO 오류: ${status.laser.error}` : '');
                 }
 
 
@@ -6849,25 +6850,8 @@ async function toggleLaser()
     }
 
 
-    // ARM이 안 되어 있으면 자동 ARM
-    if (
-        !status.laser?.armed
-    )
-    {
-        await cmd(
-            'laser.arm',
-
-            {
-                enabled: true
-            },
-
-            true
-        );
-    }
-
-
     await cmd(
-        'laser.on'
+        'laser.on', {manual: true}
     );
 }
 
