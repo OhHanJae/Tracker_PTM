@@ -17,6 +17,7 @@
     <main>
         <section id="connectionPage" class="page" hidden>
             <h2>PT503 포트·연결</h2>
+            <div class="fields"><button data-command="power_save.wake">Core / Vision 절전 해제</button><small>Core 연결을 통해 절전을 해제합니다.</small></div>
             <div class="fields"><label><input id="laserBypass" type="checkbox">레이저 바이패스</label><button id="saveLaserSettings">레이저 설정 저장</button><output id="laserBypassState">사용</output></div>
             <p>바이패스에서는 레이저 ARM·ON·펄스를 차단하며, Core의 레이저 미연결 통신 알람을 해제합니다. 설정은 서버 재시작 후에도 유지됩니다.</p>
             <section class="connection"><label>포트<select id="port"></select></label><button id="ports"
@@ -212,6 +213,7 @@
         </section>
         <section id="laser" class="page" hidden>
             <h2>레이저 모듈</h2><output id="laserState">OFF</output>
+            <p>RDK X5 물리 핀 31 · HIGH=ON / LOW=OFF. 포인트 이동 중 OFF, 실제 완료 후 허가된 출력만 ON.</p>
             <div class="toolbar">
                 <button data-command="laser.arm" data-params='{"enabled":true}'>ARM</button>
                 <button data-command="laser.arm" data-params='{"enabled":false}'>ARM 해제</button>

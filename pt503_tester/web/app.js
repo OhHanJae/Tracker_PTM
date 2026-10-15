@@ -1327,7 +1327,7 @@ async function refreshOnce()
                     {
                         $('laserBypass').checked = Boolean(status.laser.bypass);
                     }
-                    $('laserBypassState').textContent = status.laser.bypass ? '바이패스 / 출력 차단' : '사용';
+                    $('laserBypassState').textContent = status.laser.bypass ? '바이패스 / 출력 차단' : (status.laser.backend === 'gpio' ? 'GPIO BOARD 31' : 'RS485');
                     $('laserState').textContent =
                         (
                             status.laser.armed
@@ -1339,7 +1339,7 @@ async function refreshOnce()
                             status.laser.on
                                 ? 'ON'
                                 : 'OFF'
-                        );
+                        ) + (status.laser.error ? ` / GPIO 오류: ${status.laser.error}` : '');
                 }
 
 

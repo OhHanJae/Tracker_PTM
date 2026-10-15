@@ -290,3 +290,22 @@ ruff check .
 ```
 
 프로토콜 테스트에는 실제 PT503이 필요하지 않습니다. 실제 장비 시험은 반드시 이동 공간과 비상정지를 확보한 뒤 진행하세요.
+
+### RDK X5 GPIO 레이저 (2026-10-15)
+
+레이저 기본 backend는 `Hobot.GPIO`, BOARD 물리 핀 **31**, HIGH=ON / LOW=OFF입니다.
+PTM 서버만 핀을 소유하며 초기화·종료 시 LOW를 출력합니다. 기존 레이저 ARM/ON/OFF/pulse API는 유지합니다.
+포인트 이동은 먼저 OFF하고 위치 feedback으로 완료된 뒤 허가된 출력만 ON합니다.
+GPIO 라이브러리/핀 설정 실패는 상태의 `laser.error`와 `connected=false`로 보고합니다.
+Windows에서는 GPIO를 에뮬레이션하지 않습니다. 관련 테스트는 `tests/test_gpio_laser.py`의 mock을 사용합니다.
+
+RDK의 실제 실행 Python에서 `import Hobot.GPIO`가 가능해야 합니다. 신규 Linux venv는 system site packages를 사용하며,
+기존 venv는 필요하면 `python3 -m venv --system-site-packages .venv-linux`로 갱신합니다.
+GPIO 모드에서는 Arduino serial 연결을 받지 않습니다. 명시적으로 저장된 `laser.backend=modbus`만 구형 RS485 경로를 유지합니다.
+
+`laser.power_save {"enabled":true}`는 OFF·ARM 해제·예약 ON 취소와 ON 차단을 수행합니다.
+false는 차단만 해제하며 켜지지 않습니다. Core가 30분 PLC 무요청 정책을 관리합니다.
+PTM 웹/HTTP/TCP `power_save.wake`는 Core TCP에 전달합니다.
+주소 기본값은 127.0.0.1:8000이며 `PT503_CORE_HOST` / `PT503_CORE_PORT` 또는 명령의 host/port로 바꿉니다.
+이 환경변수는 PTM 자신의 TCP bind 주소인 `PT503_TCP_HOST/PORT`와 별개입니다.
+전체 계약은 Monitor `docs/Tracker_Monitor_구현_지침서.md` 16절에 있습니다.

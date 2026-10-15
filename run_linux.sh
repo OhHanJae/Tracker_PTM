@@ -73,7 +73,7 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
     exit 1
   fi
   echo "[1/3] Creating virtual environment..."
-  if ! python3 -m venv "$VENV_DIR"; then
+  if ! python3 -m venv --system-site-packages "$VENV_DIR"; then
     echo "[ERROR] 가상환경 생성 실패. sudo apt install python3-venv 를 확인하세요."
     exit 1
   fi
@@ -267,6 +267,10 @@ args=(--server --host "$WEB_HOST" --port "$WEB_PORT" --tcp-host "$TCP_HOST" --tc
 
 echo "[2/3] Checking headless dependencies..."
 ensure_headless_dependencies
+if ! "$VENV_PYTHON" -c 'import Hobot.GPIO' >/dev/null 2>&1; then
+  echo "[WARN] Hobot.GPIO is unavailable: GPIO BOARD 31 laser will stay offline."
+  echo "       On RDK, use the vendor GPIO package and python3 -m venv --system-site-packages $VENV_DIR"
+fi
 warn_if_serial_permission_missing
 ip_hint="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
 ip_hint="${ip_hint:-<ubuntu-ip>}"
