@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import io
 import math
 import re
 import shutil
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -167,6 +169,8 @@ class DrawingStore:
         return self._public_record(record, include_points=True)
 
     def create_from_uploads(self, files: list[tuple[str, bytes]]) -> dict[str, Any]:
+        if len(files) == 1 and Path(files[0][0]).suffix.lower() == ".zip":
+            return self._create_from_archive(files[0][1])
         if any(_safe_filename(filename) == "coordinates_manifest.json" for filename, _ in files):
             return self._create_cad_package_from_uploads(files)
 
@@ -395,9 +399,152 @@ class DrawingStore:
     def mesh(self, drawing_id: str) -> dict[str, Any]:
         record = self._record(drawing_id)
         try:
+            if record.get("source_kind") in CAD_PACKAGE_KINDS:
+                model = self.model_path(drawing_id)
+                cache = self.root / str(record["id"]) / "native_mesh.json"
+                if not cache.is_file() or cache.stat().st_mtime < model.stat().st_mtime:
+                    payload = _mesh_payload(load_model_file(model))
+                    payload["model_units_per_mm"] = float(
+                        (record.get("model_rendering") or {}).get("model_units_per_mm", 0.1)
+                    )
+                    payload["coordinate_frame"] = record.get("coordinate_frame")
+                    cache.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = cache.with_suffix(f".{uuid.uuid4().hex}.tmp")
+                    temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+                    temporary.replace(cache)
+                return json.loads(cache.read_text(encoding="utf-8"))
             return json.loads(Path(record["mesh_path"]).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, KeyError) as exc:
             raise KeyError(f"drawing mesh is missing: {drawing_id}") from exc
+
+    def archive(self, drawing_id: str) -> bytes:
+        """Export original assets and taught state without exposing server paths."""
+        record = self._record(drawing_id)
+        files: dict[str, Path] = {}
+        if record.get("source_kind") in CAD_PACKAGE_KINDS:
+            files["product.glb"] = self.model_path(drawing_id)
+            manifest = Path(str(record["manifest_path"]))
+            files["coordinates_manifest.json"] = manifest
+            for group in record.get("point_sets", []):
+                name = str(group.get("file") or "")
+                if not name or Path(name).name != name:
+                    raise ValueError("invalid CAD point filename")
+                files[name] = manifest.parent / name
+        else:
+            folder = self.root / drawing_id
+            for name in [record.get("source_filename"), *record.get("attachment_filenames", [])]:
+                if name and Path(str(name)).name == name:
+                    files[str(name)] = folder / str(name)
+        state = self.get_drawing(drawing_id)
+        state["backup_schema"] = "pt503.drawing.backup"
+        state["backup_version"] = 1
+        state["points_by_file"] = record.get("points_by_file", {})
+        state["calibration_by_file"] = record.get("calibration_by_file", {})
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+            for name, path in files.items():
+                archive.write(path, name)
+            archive.writestr("monitor_drawing_state.json", json.dumps(state, ensure_ascii=False, indent=2))
+        return output.getvalue()
+
+    def _create_from_archive(self, data: bytes) -> dict[str, Any]:
+        """Restore a bounded flat backup; never extract archive paths to disk."""
+        files: list[tuple[str, bytes]] = []
+        state: dict[str, Any] | None = None
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            entries = archive.infolist()
+            if len(entries) > 200 or sum(entry.file_size for entry in entries) > 128 * 1024 * 1024:
+                raise ValueError("drawing archive exceeds 200 files or 128MB")
+            names: set[str] = set()
+            for entry in entries:
+                name = entry.filename
+                if entry.is_dir() or Path(name).name != name or "\\" in name or name in {".", ".."} or name in names:
+                    raise ValueError("drawing archive requires unique flat filenames")
+                names.add(name)
+                payload = archive.read(entry)
+                if name == "monitor_drawing_state.json":
+                    state = json.loads(payload.decode("utf-8"))
+                else:
+                    files.append((name, payload))
+        if not isinstance(state, dict) or state.get("backup_schema") != "pt503.drawing.backup" or state.get("backup_version") != 1:
+            raise ValueError("unsupported drawing backup document")
+        if any(Path(name).suffix.lower() == ".zip" for name, _ in files):
+            raise ValueError("nested drawing archives are not supported")
+        drawing = self.create_from_uploads(files)
+        try:
+            self._restore_backup_state(drawing["id"], state)
+        except Exception:
+            self.delete_drawing(drawing["id"])
+            raise
+        return self.get_drawing(drawing["id"])
+
+    def _restore_backup_state(self, drawing_id: str, state: dict[str, Any]) -> None:
+        record = self._record(drawing_id)
+
+        def checked_points(value: Any, original: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+            if not isinstance(value, list):
+                raise ValueError("backup points must be a list")
+            source = {str(point["id"]): point for point in original or []}
+            result: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for point in value:
+                if not isinstance(point, dict) or not point.get("id") or str(point["id"]) in seen:
+                    raise ValueError("invalid or duplicate drawing point")
+                point_id = str(point["id"])
+                seen.add(point_id)
+                if original is not None and point_id not in source:
+                    raise ValueError("backup point does not match CAD package")
+                for key in ("x", "y", "z", "pan", "tilt", "calibration_pan", "calibration_tilt"):
+                    number = point.get(key)
+                    if number is not None and (isinstance(number, bool) or not isinstance(number, (int, float)) or not math.isfinite(number)):
+                        raise ValueError(f"invalid backup coordinate: {key}")
+                if point.get("pan") is not None and not 0 <= point["pan"] < 360:
+                    raise ValueError("backup Pan is out of range")
+                if point.get("tilt") is not None and not -60 <= point["tilt"] <= 60:
+                    raise ValueError("backup Tilt is out of range")
+                if original is not None:
+                    raw = source[point_id]
+                    if any(point.get(key) != raw.get(key) for key in ("x", "y", "z")):
+                        raise ValueError("backup changes original CAD coordinates")
+                    restored = dict(raw)
+                    for key in ("pan", "tilt", "calibration", "calibration_slot", "calibration_pan", "calibration_tilt", "label"):
+                        if key in point:
+                            restored[key] = point[key]
+                else:
+                    restored = dict(point)
+                result.append(_point_payload(restored))
+            if original is not None and seen != set(source):
+                raise ValueError("backup CAD points are incomplete")
+            return result
+
+        if record.get("source_kind") in CAD_PACKAGE_KINDS:
+            if state.get("coordinate_frame") != record.get("coordinate_frame") or state.get("units") != record.get("units"):
+                raise ValueError("backup coordinate frame does not match")
+            groups = state.get("points_by_file")
+            if not isinstance(groups, dict) or set(groups) != set(record["points_by_file"]):
+                raise ValueError("backup CAD groups do not match")
+            restored_groups = {
+                name: checked_points(points, record["points_by_file"][name]) for name, points in groups.items()
+            }
+            selected = str(state.get("selected_point_file") or "")
+            if selected not in restored_groups:
+                raise ValueError("backup selected group is invalid")
+            record["points_by_file"] = restored_groups
+            record["selected_point_file"] = selected
+            record["calibration_by_file"] = dict(state.get("calibration_by_file") or {})
+        else:
+            record["points"] = checked_points(state.get("points"))
+        for key in ("product_rotation_deg", "product_tilt_deg"):
+            number = state.get(key, 0.0)
+            if isinstance(number, bool) or not isinstance(number, (int, float)) or not math.isfinite(number) or abs(number) > 360:
+                raise ValueError("invalid product pose in drawing backup")
+            record[key] = float(number)
+        calibration = state.get("calibration")
+        if calibration is not None and not isinstance(calibration, dict):
+            raise ValueError("invalid backup calibration")
+        record["calibration"] = calibration
+        record["updated"] = now_iso()
+        self.save()
 
     def model_path(self, drawing_id: str) -> Path:
         record = self._record(drawing_id)

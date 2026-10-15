@@ -179,6 +179,8 @@ class HeadlessController:
         self.laser_on = False
         self.aux_number = 1
         self._jog_next_resend = 0.0
+        self._jog_lease_deadline = 0.0
+        self._jog_token: str | None = None
         # Active continuous JOG key: (pan, tilt, pan_level, tilt_level).
         # The PT unit receives the frame at start/change and then about every
         # every few seconds while manual JOG remains active.  Re-sending too
@@ -409,6 +411,17 @@ class HeadlessController:
                 try:
                     now = time.monotonic()
                     jogging = self._active_jog is not None
+
+                    if jogging and self._jog_lease_deadline and now >= self._jog_lease_deadline:
+                        self._active_jog = None
+                        self._jog_owner_client_id = None
+                        self._jog_next_resend = 0.0
+                        self._jog_lease_deadline = 0.0
+                        self._jog_token = None
+                        self._tracker = None
+                        self.motion_state = "stopped"
+                        self.send(stop(self._address), wait_ms=0)
+                        jogging = False
 
                     # Pelco-D runaway protection: while the operator is still
                     # holding manual motion, repeat the same motion command only
@@ -782,6 +795,8 @@ class HeadlessController:
                 "position": {"pan": self.current_pan, "tilt": self.current_tilt},
                 "motion": {
                     "completion": dict(self.completion_config),
+                    "manual_jog_lease_max_ms": 3000,
+                    "manual_jog_token_supported": True,
                     "state": self.motion_state,
                     "id": self._pending_motion.get("motion_id") if self._pending_motion else None,
                     "completed_id": self._completed_motion_id,
@@ -1335,6 +1350,10 @@ class HeadlessController:
             force_stop = command == "motion.force_stop"
             if force_stop:
                 command = "motion.stop"
+            if command == "motion.stop" and "jog_token" in params and not force_stop:
+                token = str(params.get("jog_token") or "")
+                if not token or self._active_jog is None or token != self._jog_token:
+                    return {"accepted": False, "stopped": False, "reason": "manual jog was ended or superseded"}
             for key in ("pan", "tilt", "pan_delta", "tilt_delta", "tolerance_deg"):
                 if (
                     command != "motion.jog"
@@ -1349,6 +1368,15 @@ class HeadlessController:
             if command == "motion.jog":
                 if "pan_speed" in params or "tilt_speed" in params:
                     raise HeadlessApiError("INVALID_PARAMS", "Use speed_level (1..8)")
+                # Opt-in lease for clients relayed through a persistent Core socket.
+                # Legacy duration_ms and unleased continuous JOG remain unchanged.
+                lease_ms = (
+                    self._int(params, "lease_ms", minimum=100, maximum=3000)
+                    if "lease_ms" in params else None
+                )
+                token = params.get("jog_token")
+                if token is not None and (not isinstance(token, str) or not token or len(token) > 128 or lease_ms is None):
+                    raise HeadlessApiError("INVALID_PARAMS", "jog_token requires a lease and 1..128 characters")
                 pan = {"left": PanDirection.LEFT, "right": PanDirection.RIGHT, "stop": PanDirection.STOP}[self._enum(params, "pan", {"left", "right", "stop"}, "stop")]
                 tilt = {"up": TiltDirection.UP, "down": TiltDirection.DOWN, "stop": TiltDirection.STOP}[self._enum(params, "tilt", {"up", "down", "stop"}, "stop")]
                 if "speed_level" in params:
@@ -1397,6 +1425,10 @@ class HeadlessController:
                     # the JOG.  HTTP/Web requests have client_id=None and are not
                     # tied to unrelated TCP socket disconnects.
                     self._jog_owner_client_id = client_id
+                    self._jog_token = token
+                    self._jog_lease_deadline = (
+                        time.monotonic() + lease_ms / 1000.0 if lease_ms is not None else 0.0
+                    )
                     self._tracker = None
                     self.motion_state = "jog"
 
@@ -1409,6 +1441,8 @@ class HeadlessController:
                     "tilt_level": tl,
                     "speed_level": pl if pl == tl else None,
                     "resend_interval_ms": int(JOG_RESEND_INTERVAL_S * 1000),
+                    "lease_ms": lease_ms,
+                    "jog_token": token,
                 }
             if command in {"motion.stop", "cruise.stop", "scan.stop"}:
                 self._jog_next_resend = 0.0
@@ -1710,7 +1744,10 @@ class HeadlessController:
             return {"accepted": True, "scanning": False}
 
         if command == "motion.stop":
-            return {"rx": self.send(stop(self._address), wait_ms=0)}
+            result = {"rx": self.send(stop(self._address), wait_ms=0)}
+            if "jog_token" in params:
+                result.update(accepted=True, stopped=True)
+            return result
         if command == "motion.jog":
             pan = {"left": PanDirection.LEFT, "right": PanDirection.RIGHT, "stop": PanDirection.STOP}[
                 self._enum(params, "pan", {"left", "right", "stop"}, "stop")
@@ -2229,6 +2266,12 @@ class WebHandler(BaseHTTPRequestHandler):
                     self.controller.drawing_store.model_path(parts[2]).read_bytes(),
                     "model/gltf-binary",
                 )
+            elif path.startswith("/api/drawings/") and path.endswith("/archive"):
+                parts = [unquote(item) for item in path.strip("/").split("/")]
+                if len(parts) != 4 or parts[0] != "api" or parts[1] != "drawings" or parts[3] != "archive":
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                self._send_bytes(self.controller.drawing_store.archive(parts[2]), "application/zip")
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
         except self._CLIENT_DISCONNECT_ERRORS:

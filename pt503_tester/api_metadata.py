@@ -141,7 +141,7 @@ COMMAND_TEMPLATES: dict[str, dict[str, Any]] = {
         "retry_interval_s": 3.0,
         "health_interval_s": 2.0,
     },
-    "motion.jog": {"pan": "right", "tilt": "stop", "speed_level": 5},
+    "motion.jog": {"pan": "right", "tilt": "stop", "speed_level": 5, "lease_ms": 1000},
     "motion.stop": {},
     "motion.force_stop": {},
     "motion.absolute": {"pan": 0.0, "tilt": 0.0},
