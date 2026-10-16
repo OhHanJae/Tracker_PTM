@@ -7,6 +7,7 @@ By default it binds to the machine's primary LAN IPv4 address for field use.
 from __future__ import annotations
 
 import argparse
+import contextlib
 from datetime import datetime
 import errno
 import json
@@ -14,6 +15,9 @@ import re
 import os
 import socket
 import socketserver
+import queue
+import select
+import struct
 import sys
 import threading
 import uuid
@@ -37,8 +41,6 @@ from .protocol import (
     PanDirection,
     ProtocolError,
     TiltDirection,
-    adjust_preset_speed,
-    adjust_scan_speed,
     auto_home,
     call_preset,
     clear_preset,
@@ -89,6 +91,10 @@ DEFAULT_HTTP_PORT = 8080
 DEFAULT_TCP_HOST = DEFAULT_HTTP_HOST
 DEFAULT_TCP_PORT = 8765
 MAX_TCP_LINE_BYTES = 65_536
+TCP_SEND_TIMEOUT_S = 2.0
+TCP_SEND_QUEUE_SIZE = 32
+TCP_SEND_QUEUE_BYTES = 8 * 1024 * 1024
+CORE_WAKE_TIMEOUT_S = 2.0
 
 # Pelco-D manual motion is latched by direction bits. Generic Pelco guidance
 # describes a longer runaway timeout, but PT503 field behavior can stop sooner.
@@ -550,7 +556,7 @@ class HeadlessController:
 
     def _run_auto_reconnect(self) -> None:
         with self._lock:
-            if self._shutdown.is_set():
+            if self._shutdown.is_set() or self.connected or self.scanning or self._auto_scan_active:
                 return
             self._auto_scan_active = True
             self._last_auto_scan = time.monotonic()
@@ -1319,16 +1325,35 @@ class HeadlessController:
             port = self._int(params, "port", int(os.environ.get("PT503_CORE_PORT", "8000")),
                              minimum=1, maximum=65535)
             try:
-                with socket.create_connection((host, port), timeout=2) as connection:
-                    connection.sendall(b'{"command":"power_save.wake","params":{}}\n')
-                    with connection.makefile("rb") as reader:
-                        line = reader.readline(65537)
-                    if len(line) > 65536:
-                        raise ValueError("Core response is too large")
-                response = json.loads(line)
-                if not response.get("ok"):
-                    raise ValueError(str(response.get("error")))
-                return response.get("result") or {}
+                request_id = uuid.uuid4().hex
+                request = {"id": request_id, "command": "power_save.wake", "params": {}}
+                deadline = time.monotonic() + CORE_WAKE_TIMEOUT_S
+                with socket.create_connection((host, port), timeout=CORE_WAKE_TIMEOUT_S) as connection:
+                    connection.settimeout(max(0.001, deadline - time.monotonic()))
+                    connection.sendall((json.dumps(request) + "\n").encode("utf-8"))
+                    buffered = bytearray()
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("Core wake response timed out")
+                        if b"\n" in buffered:
+                            line, _, rest = buffered.partition(b"\n")
+                            buffered = bytearray(rest)
+                            if len(line) > MAX_TCP_LINE_BYTES:
+                                raise ValueError("Core response is too large")
+                            response = json.loads(line)
+                            if not isinstance(response, dict) or response.get("id") != request_id:
+                                continue
+                            if response.get("ok") is not True:
+                                raise ValueError(str(response.get("error")))
+                            return response.get("result") or {}
+                        if len(buffered) > MAX_TCP_LINE_BYTES:
+                            raise ValueError("Core response is too large")
+                        connection.settimeout(remaining)
+                        chunk = connection.recv(min(4096, MAX_TCP_LINE_BYTES + 1 - len(buffered)))
+                        if not chunk:
+                            raise ValueError("Core closed before the wake response")
+                        buffered.extend(chunk)
             except (OSError, ValueError) as exc:
                 raise HeadlessApiError("CORE_WAKE_FAILED", str(exc)) from exc
         # Scan cancellation and status must stay available during discovery.
@@ -1337,7 +1362,7 @@ class HeadlessController:
             return {"accepted": True}
         if command == "serial.scan":
             with self._lock:
-                if self.scanning or self.connected:
+                if self.scanning or self._auto_scan_active or self.connected:
                     raise HeadlessApiError("BUSY", "Disconnect before scanning")
                 self.scanning = True
                 self._scan_cancel.clear()
@@ -1356,53 +1381,61 @@ class HeadlessController:
                     timeout_ms=self._int(params, "timeout_ms", 200, minimum=50, maximum=2000),
                 )
             finally:
-                self.scanning = False
+                with self._lock:
+                    self.scanning = False
         if command == "serial.auto_reconnect":
             with self._lock:
+                updated = dict(self.auto_reconnect_config)
                 if "enabled" in params:
-                    self.auto_reconnect_config["enabled"] = self._bool(params, "enabled")
+                    updated["enabled"] = self._bool(params, "enabled")
                 if "baudrates" in params:
                     baudrates = params["baudrates"]
                     if not isinstance(baudrates, list) or not baudrates:
                         raise HeadlessApiError("INVALID_PARAMS", "baudrates must be non-empty array")
-                    self.auto_reconnect_config["baudrates"] = [
+                    updated["baudrates"] = [
                         self._int({"baud": item}, "baud", minimum=1200, maximum=115200)
                         for item in baudrates
                     ]
                 if "first_address" in params:
-                    self.auto_reconnect_config["first_address"] = self._int(
+                    updated["first_address"] = self._int(
                         params, "first_address", minimum=1, maximum=255
                     )
                 if "last_address" in params:
-                    self.auto_reconnect_config["last_address"] = self._int(
+                    updated["last_address"] = self._int(
                         params, "last_address", minimum=1, maximum=255
                     )
                 if "timeout_ms" in params:
-                    self.auto_reconnect_config["timeout_ms"] = self._int(
+                    updated["timeout_ms"] = self._int(
                         params, "timeout_ms", minimum=50, maximum=2000
                     )
                 if "retry_interval_s" in params:
-                    self.auto_reconnect_config["retry_interval_s"] = self._float(
+                    updated["retry_interval_s"] = self._float(
                         params,
                         "retry_interval_s",
                         minimum=0.5,
                         maximum=3600.0,
                     )
                 if "health_interval_s" in params:
-                    self.auto_reconnect_config["health_interval_s"] = self._float(
+                    updated["health_interval_s"] = self._float(
                         params,
                         "health_interval_s",
                         minimum=0.5,
                         maximum=3600.0,
                     )
                 if (
-                    int(self.auto_reconnect_config["first_address"])
-                    > int(self.auto_reconnect_config["last_address"])
+                    int(updated["first_address"])
+                    > int(updated["last_address"])
                 ):
                     raise HeadlessApiError(
                         "INVALID_PARAMS", "first_address must be <= last_address"
                     )
-                self._save_settings()
+                previous = self.auto_reconnect_config
+                self.auto_reconnect_config = updated
+                try:
+                    self._save_settings()
+                except OSError:
+                    self.auto_reconnect_config = previous
+                    raise
                 return dict(self.auto_reconnect_config)
         with self._lock:
             if self._shutdown.is_set():
@@ -2116,21 +2149,6 @@ class HeadlessController:
                 [str(item) for item in params.get("ordered_ids", [])],
             )
             return {"recipe": recipe.to_dict()}
-        if command == "point.goto":
-            point = self.recipe_store.get_point(str(params["recipe_id"]), str(params["point_id"]))
-            if not point.enabled:
-                raise HeadlessApiError("DISABLED", "point is disabled")
-            target, correction = self._recipe_motion_target(str(params["recipe_id"]), point)
-            result = self.command(
-                "motion.absolute",
-                {
-                    **target,
-                    "pan_speed": point.pan_speed,
-                    "tilt_speed": point.tilt_speed,
-                },
-            )
-            return {**result, "pose_correction": correction}
-
         if command == "lens.motion":
             action = self._enum(params, "action", {"zoom_in", "zoom_out", "focus_near", "focus_far", "iris_open", "iris_close"})
             return {"accepted": True, "action": action, "rx": self.send(lens_motion(self._address, action), wait_ms=80)}
@@ -2152,9 +2170,6 @@ class HeadlessController:
             self._require_confirm(params)
             number = self._int(params, "number", minimum=1, maximum=255)
             return {"accepted": True, "number": number, "rx": self.send(clear_preset(self._address, number), wait_ms=80)}
-        if command == "preset.speed_adjust":
-            direction = self._enum(params, "direction", {"faster", "slower"})
-            return {"accepted": True, "direction": direction, "rx": self.send(adjust_preset_speed(self._address, direction == "faster"), wait_ms=80)}
         if command == "raw.describe":
             raw_command = parse_hex_command(str(params["hex"]), self._address)
             return {"hex": frame_to_hex(raw_command.data), "description": raw_command.description}
@@ -2184,9 +2199,6 @@ class HeadlessController:
             pan_speed = self._int(params, "pan_speed", minimum=0, maximum=63)
             tilt_speed = self._int(params, "tilt_speed", minimum=0, maximum=63)
             return {"accepted": True, "pan_speed": pan_speed, "tilt_speed": tilt_speed, "rx": self.send(set_scan_speed(self._address, pan_speed, tilt_speed), wait_ms=80)}
-        if command == "scan.speed_adjust":
-            direction = self._enum(params, "direction", {"faster", "slower"})
-            return {"accepted": True, "direction": direction, "rx": self.send(adjust_scan_speed(self._address, direction == "faster"), wait_ms=80)}
 
         if command == "cruise.start":
             track = self._int(params, "track", minimum=1, maximum=8)
@@ -2216,6 +2228,8 @@ class HeadlessController:
             address = self._int(params, "address", LASER_DEFAULT_ADDRESS, minimum=1, maximum=247)
             return self.connect_laser(port, baudrate, address)
         if command == "laser.serial_disconnect":
+            if self._laser_backend == "gpio":
+                raise HeadlessApiError("LASER_GPIO_MODE", "Laser uses GPIO BOARD 31; serial disconnection is disabled")
             self.close_laser()
             return {"connected": False, "laser_on": False}
         if command == "laser.on":
@@ -2233,13 +2247,6 @@ class HeadlessController:
             if self.laser_bypass and not self.laser_connected:
                 return {"bypass": True, "connected": False, "laser_on": False}
             return self._laser_read_coil()
-        if command == "laser.pulse":
-            # Normally handled in command() so OFF can be performed by the watchdog.
-            duration = self._int(params, "duration_ms", 500, minimum=50, maximum=60_000)
-            result = self._laser_write_coil(True)
-            self._laser_deadline = time.monotonic() + duration / 1000.0
-            return {**result, "duration_ms": duration}
-
         if command == "device.query":
             query = self._enum(params, "type", {"pan", "tilt", "zoom", "focus", "device"})
             api_command = {
@@ -2558,11 +2565,12 @@ class HeadlessTcpServer(socketserver.ThreadingTCPServer):
         server_address: tuple[str, int],
         controller: HeadlessController,
     ) -> None:
-        super().__init__(server_address, TcpJsonHandler)
         self.controller = controller
         self._client_lock = threading.Lock()
         self._next_client_number = 1
         self._clients: dict[str, TcpJsonHandler] = {}
+        self._closing = False
+        super().__init__(server_address, TcpJsonHandler)
         self.controller.set_event_callback(self.emit_event)
 
     def next_client_id(self) -> str:
@@ -2573,11 +2581,27 @@ class HeadlessTcpServer(socketserver.ThreadingTCPServer):
 
     def register(self, handler: "TcpJsonHandler") -> None:
         with self._client_lock:
-            self._clients[handler.client_id] = handler
+            closing = self._closing
+            if not closing:
+                self._clients[handler.client_id] = handler
+        if closing:
+            handler._close_connection()
 
     def unregister(self, client_id: str) -> None:
         with self._client_lock:
             self._clients.pop(client_id, None)
+
+    def server_close(self) -> None:
+        self.controller.set_event_callback(None)
+        with self._client_lock:
+            self._closing = True
+            handlers = list(self._clients.values())
+        for handler in handlers:
+            handler._close_connection()
+        super().server_close()
+        deadline = time.monotonic() + TCP_SEND_TIMEOUT_S + 0.5
+        for handler in handlers:
+            handler._sender_thread.join(timeout=max(0.0, deadline - time.monotonic()))
 
     def emit_event(
         self,
@@ -2601,8 +2625,13 @@ class TcpJsonHandler(socketserver.StreamRequestHandler):
 
     def setup(self) -> None:
         super().setup()
-        self._write_lock = threading.Lock()
+        self._send_state_lock = threading.Lock()
+        self._send_queue: queue.Queue[bytes] = queue.Queue(maxsize=TCP_SEND_QUEUE_SIZE)
+        self._queued_bytes = 0
         self._disconnected = False
+        self._drain_deadline = 0.0
+        self._sender_thread = threading.Thread(target=self._send_loop, name="pt503-client-writer", daemon=True)
+        self._sender_thread.start()
         self.client_id = self.server.next_client_id()
         self.server.register(self)
         self._send_json(
@@ -2640,9 +2669,16 @@ class TcpJsonHandler(socketserver.StreamRequestHandler):
             self._handle_line(raw_line)
 
     def finish(self) -> None:
-        self._disconnect_safety()
-        self.server.unregister(self.client_id)
-        super().finish()
+        try:
+            self._disconnect_safety()
+        finally:
+            with self._send_state_lock:
+                self._drain_deadline = time.monotonic() + TCP_SEND_TIMEOUT_S
+            self._sender_thread.join(timeout=TCP_SEND_TIMEOUT_S)
+            self._close_connection()
+            self._sender_thread.join(timeout=0.5)
+            self.server.unregister(self.client_id)
+            super().finish()
 
     def _handle_line(self, raw_line: bytes) -> None:
         request_id: Any = None
@@ -2712,15 +2748,64 @@ class TcpJsonHandler(socketserver.StreamRequestHandler):
             pass
 
     def _send_json(self, message: dict[str, Any]) -> None:
-        text = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
-        with self._write_lock:
-            if self._disconnected:
+        payload = (json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        close = False
+        with self._send_state_lock:
+            if self._disconnected or self._drain_deadline:
                 return
-            try:
-                self.wfile.write((text + "\n").encode("utf-8"))
-                self.wfile.flush()
-            except self._CLIENT_DISCONNECT_ERRORS:
-                self._disconnected = True
+            if self._queued_bytes + len(payload) > TCP_SEND_QUEUE_BYTES:
+                close = True
+            else:
+                try:
+                    self._send_queue.put_nowait(payload)
+                    self._queued_bytes += len(payload)
+                except queue.Full:
+                    close = True
+        if close:
+            self._close_connection()
+
+    def _close_connection(self) -> None:
+        with self._send_state_lock:
+            self._disconnected = True
+        with contextlib.suppress(OSError):
+            self.connection.shutdown(socket.SHUT_RDWR)
+
+    def _send_loop(self) -> None:
+        try:
+            while not self._disconnected:
+                if self._drain_deadline and self._send_queue.empty():
+                    break
+                try:
+                    payload = self._send_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                with self._send_state_lock:
+                    self._queued_bytes -= len(payload)
+                self._write_payload(payload)
+        except (OSError, ValueError):
+            pass
+        finally:
+            self._close_connection()
+
+    def _write_payload(self, payload: bytes) -> None:
+        deadline = time.monotonic() + TCP_SEND_TIMEOUT_S
+        if self._drain_deadline:
+            deadline = min(deadline, self._drain_deadline)
+        remaining_payload = memoryview(payload)
+        while remaining_payload:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("TCP client did not receive the response in time")
+            # SO_SNDTIMEO limits writes only; an idle client's blocking reader is unchanged.
+            timeout = (struct.pack("I", max(1, math.ceil(remaining * 1000))) if os.name == "nt"
+                       else struct.pack("ll", int(remaining), int(remaining % 1 * 1_000_000)))
+            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDTIMEO, timeout)
+            if not select.select([], [self.connection], [], remaining)[1]:
+                raise TimeoutError("TCP client did not receive the response in time")
+            sent = self.connection.send(remaining_payload[:65536])
+            if not sent:
+                raise ConnectionError("TCP client disconnected during a response")
+            remaining_payload = remaining_payload[sent:]
 
     @staticmethod
     def _timestamp() -> str:

@@ -7,6 +7,7 @@ import math
 import os
 import sys
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -221,6 +222,13 @@ class RecipeStore:
             "recipes": [recipe.to_dict() for recipe in recipes],
         }
 
+    def _save_or_restore(self, previous: list[Recipe]) -> None:
+        try:
+            self.save()
+        except OSError:
+            self._recipes = previous
+            raise
+
     def import_document(self, payload: Any) -> list[dict[str, Any]]:
         imported = self._validated_document(payload)
         imported_ids = {recipe.id for recipe in imported}
@@ -279,6 +287,7 @@ class RecipeStore:
         for label, angle in (("product_rotation_deg", product_rotation_deg), ("product_tilt_deg", product_tilt_deg)):
             if angle is not None and (not math.isfinite(float(angle)) or abs(float(angle)) > 360.0):
                 raise ValueError(f"{label} must be between -360 and 360 degrees")
+        previous = deepcopy(self._recipes)
         if existing is not None:
             recipe = existing
             recipe.name = name
@@ -295,7 +304,7 @@ class RecipeStore:
             recipe.product_rotation_deg = float(product_rotation_deg or 0.0)
             recipe.product_tilt_deg = float(product_tilt_deg or 0.0)
             self._recipes.append(recipe)
-        self.save()
+        self._save_or_restore(previous)
         return recipe
 
     def create_pose_recipe(
@@ -357,8 +366,9 @@ class RecipeStore:
         if len(self._recipes) <= 1:
             raise ValueError("at least one recipe is required")
         target_id = self.get_recipe(recipe_id).id
+        previous = self._recipes
         self._recipes = [recipe for recipe in self._recipes if recipe.id != target_id]
-        self.save()
+        self._save_or_restore(previous)
 
     def _next_index(self) -> int:
         used = {recipe.index for recipe in self._recipes}
@@ -398,6 +408,7 @@ class RecipeStore:
         enabled: bool = True,
     ) -> RecipePoint:
         recipe = self.get_recipe(recipe_id)
+        previous = deepcopy(self._recipes)
         if point_id:
             point = self.get_point(recipe_id, point_id)
             point.name = name
@@ -424,7 +435,7 @@ class RecipeStore:
             recipe.points.append(point)
         recipe.updated = now_iso()
         recipe.normalize_orders()
-        self.save()
+        self._save_or_restore(previous)
         return point
 
     def get_point(self, recipe_id: str, point_id: str) -> RecipePoint:
@@ -440,22 +451,25 @@ class RecipeStore:
 
     def delete_point(self, recipe_id: str, point_id: str) -> None:
         recipe = self.get_recipe(recipe_id)
-        recipe.points = [point for point in recipe.points if point.id != point_id]
+        target_id = self.get_point(recipe_id, point_id).id
+        previous = deepcopy(self._recipes)
+        recipe.points = [point for point in recipe.points if point.id != target_id]
         recipe.updated = now_iso()
         recipe.normalize_orders()
-        self.save()
+        self._save_or_restore(previous)
 
     def reorder_points(self, recipe_id: str, ordered_ids: list[str]) -> Recipe:
         recipe = self.get_recipe(recipe_id)
         by_id = {point.id: point for point in recipe.points}
         if len(ordered_ids) != len(by_id) or set(by_id) != set(ordered_ids):
             raise ValueError("ordered_ids must contain every point id exactly once")
+        previous = deepcopy(self._recipes)
         recipe.points = [by_id[item] for item in ordered_ids]
         for order, point in enumerate(recipe.points, start=1):
             point.order = order
         recipe.updated = now_iso()
         recipe.normalize_orders()
-        self.save()
+        self._save_or_restore(previous)
         return recipe
 
     @classmethod
