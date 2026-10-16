@@ -17,6 +17,7 @@ import socket
 import socketserver
 import queue
 import select
+import signal
 import struct
 import sys
 import threading
@@ -2864,18 +2865,37 @@ def run_server(
         tcp_thread.start()
         print(f"PT503 headless TCP/JSON server listening on {tcp_host}:{tcp_port}")
     print(f"PT503 headless web/API server listening on http://{host}:{port}")
+    stopping = False
+
+    def request_stop(_signum, _frame) -> None:
+        nonlocal stopping
+        if not stopping:
+            stopping = True
+            raise KeyboardInterrupt
+
+    previous_handlers = {}
+    if threading.current_thread() is threading.main_thread():
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[signum] = signal.signal(signum, request_stop)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        if tcp_server is not None:
-            tcp_server.shutdown()
-            tcp_server.server_close()
-        if tcp_thread is not None:
-            tcp_thread.join(timeout=2)
-        controller.shutdown()
-        server.server_close()
+        stopping = True
+        try:
+            try:
+                controller.shutdown()
+            finally:
+                if tcp_server is not None:
+                    tcp_server.shutdown()
+                    tcp_server.server_close()
+                if tcp_thread is not None:
+                    tcp_thread.join(timeout=2)
+                server.server_close()
+        finally:
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
     return 0
 
 
