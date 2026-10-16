@@ -161,7 +161,7 @@ QToolTip { color: #f4f7fb; background: #263142; border: 1px solid #5a6b84; }
 SILENT_PREFIX = "[자동위치조회:숨김] "
 
 
-DEFAULT_DRAWING_DIR = Path(r"C:\Users\gram\Desktop\트래커 관련\도면 이미지\EODCT288_ASSY")
+DEFAULT_DRAWING_DIR = Path(__file__).resolve().parents[2] / "도면 이미지" / "EODCT288_ASSY"
 STARTUP_BAUDRATE = 9600
 STARTUP_SCAN_TIMEOUT_MS = 200
 STARTUP_SCAN_DELAY_MS = 250
