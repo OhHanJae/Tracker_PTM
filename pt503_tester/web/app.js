@@ -610,10 +610,6 @@ for (
                         new CustomEvent('drawing-tab-visible')
                     );
                 }
-                if (id === 'settings' && powerSaveTimeoutSeconds === null)
-                {
-                    guarded(loadPowerSaveSettings)();
-                }
 
 
                 for (
@@ -911,17 +907,15 @@ $('saveLaserSettings').onclick = guarded(async () => {
 });
 
 let ptmSettingsDirty = false;
-let powerSaveTimeoutSeconds = null;
 
 function renderPtmSettings(settings)
 {
     if (!settings) return;
-    for (const [key, settingId, manualId, gamepadId] of [
-        ['invert_pan', 'settingInvertPan', 'manualInvertPan', 'padInvertX'],
-        ['invert_tilt', 'settingInvertTilt', 'manualInvertTilt', 'padInvertY']
+    for (const [key, settingId, gamepadId] of [
+        ['invert_pan', 'settingInvertPan', 'padInvertX'],
+        ['invert_tilt', 'settingInvertTilt', 'padInvertY']
     ])
     {
-        $(manualId).checked = Boolean(settings[key]);
         $(gamepadId).checked = Boolean(settings[key]);
         if (!ptmSettingsDirty) $(settingId).checked = Boolean(settings[key]);
     }
@@ -945,54 +939,6 @@ $('ptmSettings').onsubmit = guarded(async event => {
     ptmSettingsDirty = false;
     status.settings = saved;
     renderPtmSettings(saved);
-});
-
-async function loadPowerSaveSettings()
-{
-    $('powerSaveSettingsState').textContent = 'Core 설정을 불러오는 중';
-    try
-    {
-        const saved = await cmd('power_save.settings', {}, true);
-        powerSaveTimeoutSeconds = saved.timeout_s;
-        $('powerSaveMinutes').value = String(saved.timeout_minutes);
-        $('powerSaveMinutes').disabled = false;
-        $('savePowerSaveSettings').disabled = false;
-        $('powerSaveSettingsState').textContent = 'Core 저장값: ' + saved.timeout_minutes + '분';
-    }
-    catch (error)
-    {
-        powerSaveTimeoutSeconds = null;
-        $('powerSaveMinutes').disabled = true;
-        $('savePowerSaveSettings').disabled = true;
-        $('powerSaveSettingsState').textContent = 'Core 설정 조회 실패: ' + error.message;
-        throw error;
-    }
-}
-
-$('loadPowerSaveSettings').onclick = guarded(loadPowerSaveSettings);
-$('powerSaveSettings').onsubmit = guarded(async event => {
-    event.preventDefault();
-    if (powerSaveTimeoutSeconds === null) return;
-    $('savePowerSaveSettings').disabled = true;
-    try
-    {
-        const saved = await cmd('power_save.settings', {
-            timeout_minutes: Number($('powerSaveMinutes').value),
-            expected_timeout_s: powerSaveTimeoutSeconds
-        });
-        powerSaveTimeoutSeconds = saved.timeout_s;
-        $('powerSaveMinutes').value = String(saved.timeout_minutes);
-        $('powerSaveSettingsState').textContent = 'Core에 저장됨: ' + saved.timeout_minutes + '분';
-    }
-    catch (error)
-    {
-        $('powerSaveSettingsState').textContent = 'Core 저장 실패: ' + error.message;
-        throw error;
-    }
-    finally
-    {
-        $('savePowerSaveSettings').disabled = false;
-    }
 });
 
 
@@ -1152,26 +1098,22 @@ $('dialStop').onclick =
 // 웹 수동 Pan/Tilt 버튼
 // ============================================================================
 
-for (const [key, manualId, gamepadId] of [
-    ['invert_pan', 'manualInvertPan', 'padInvertX'],
-    ['invert_tilt', 'manualInvertTilt', 'padInvertY']
+for (const [key, gamepadId] of [
+    ['invert_pan', 'padInvertX'],
+    ['invert_tilt', 'padInvertY']
 ])
 {
-    const manualInput = $(manualId);
     const gamepadInput = $(gamepadId);
-    for (const input of [manualInput, gamepadInput])
-    {
-        input.addEventListener('change', guarded(async () => {
-            try
-            {
-                status.settings = await cmd('ptm.settings', {[key]: input.checked});
-            }
-            finally
-            {
-                renderPtmSettings(status.settings);
-            }
-        }));
-    }
+    gamepadInput.addEventListener('change', guarded(async () => {
+        try
+        {
+            status.settings = await cmd('ptm.settings', {[key]: gamepadInput.checked});
+        }
+        finally
+        {
+            renderPtmSettings(status.settings);
+        }
+    }));
 }
 
 document

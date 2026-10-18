@@ -46,15 +46,6 @@
                     <p>방향 반전은 수동 버튼과 게임패드 JOG에 공통 적용되며 절대좌표와 레시피 좌표는 유지됩니다.</p>
                     <p>전원 ON 호밍은 지원 펌웨어의 전원 인가 Self-check 설정입니다. 연결 중에는 즉시 설정 명령을 전송하고, 연결 전 저장하면 다음 연결 시 전송합니다. 장치가 설정을 지원하는지는 실제 전원 재인가로 확인하세요.</p>
                 </section>
-                <section>
-                    <h3>레이저 절전 시간</h3>
-                    <form id="powerSaveSettings">
-                        <label>대기 시간 (분)<input id="powerSaveMinutes" type="number" min="0.0166666667" max="1440" step="any" required disabled></label>
-                        <button id="savePowerSaveSettings" disabled>절전 시간 저장</button>
-                    </form>
-                    <button id="loadPowerSaveSettings">Core 설정 불러오기</button><output id="powerSaveSettingsState">Core 설정을 불러오면 편집할 수 있습니다.</output>
-                    <p>Core의 공통 절전 시간을 저장하며 레이저와 Vision에 함께 적용됩니다. PLC 운전과 모터 동작을 중지한 상태에서 저장하세요. PTM 단독 실행 시에는 Core 연결이 필요합니다.</p>
-                </section>
             </div>
         </section>
         <section id="manual" class="page">
@@ -65,7 +56,7 @@
                                 id="actualTilt">—</output></label></div><output id="motionState">idle</output><button
                         data-command="position.get">위치 조회</button>
                     <h2>수동 조작</h2>
-                    <div class="fields"><label>Pan/Tilt 통합 속도<select id="speedLevel"></select></label><label><input id="manualInvertPan" type="checkbox">Pan 반전</label><label><input id="manualInvertTilt" type="checkbox">Tilt 반전</label></div>
+                    <div class="fields"><label>Pan/Tilt 통합 속도<select id="speedLevel"></select></label></div>
                     <div class="dial"><button class="up" data-pan="stop" data-tilt="up" title="위">▲</button><button
                             class="left" data-pan="left" data-tilt="stop" title="왼쪽">◀</button><button class="right"
                             data-pan="right" data-tilt="stop" title="오른쪽">▶</button><button class="down" data-pan="stop"
