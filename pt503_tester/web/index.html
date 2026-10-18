@@ -66,15 +66,16 @@
             </div>
         </section>
         <section id="recipes" class="page" hidden>
-            <div class="toolbar"><select id="recipeSelect" aria-label="레시피"></select><button id="manageRecipes" type="button">레시피 관리</button><button id="exportRecipe" type="button">파일 내보내기</button><button id="importRecipe"
+            <div class="toolbar recipe-toolbar">
+                <div class="recipe-actions"><select id="recipeSelect" aria-label="레시피"></select><button id="manageRecipes" type="button">레시피 관리</button><button id="exportRecipe" type="button">파일 내보내기</button><button id="importRecipe"
                     type="button">파일 불러오기</button><input id="recipeFile" type="file" accept="application/json,.json"
                     hidden></div>
-            <p id="recipeDescription"></p>
-            <output id="selectedPointStatus">선택 포인트: -</output>
-            <div class="toolbar"><button id="previewRecipePose" type="button">저장된 Pan/Tilt 미리보기</button><output id="recipePoseStatus">이동 없이 선택 포인트의 저장된 Pan/Tilt를 확인합니다.</output></div>
-            <div class="toolbar"><button id="runRecipeSequence" type="button">1번부터 순차 테스트</button><button
+                <div class="recipe-actions recipe-test-actions"><button id="runRecipeSequence" type="button">1번부터 순차 테스트</button><button
                     id="runRecipeRandom" type="button">랜덤 반복 시작</button><button id="stopRecipeTest" type="button"
                     class="danger" disabled>테스트 정지</button><output id="recipeTestStatus">대기</output></div>
+            </div>
+            <p id="recipeDescription"></p>
+            <output id="selectedPointStatus">선택 포인트: -</output>
             <div class="table-scroll">
                 <table>
                     <thead>
@@ -84,7 +85,6 @@
                             <th>Pan °</th>
                             <th>Tilt °</th>
                             <th>추정 XYZ</th>
-                            <th>대기 ms</th>
                             <th>사용</th>
                             <th>메모</th>
                             <th>작업</th>
@@ -97,8 +97,7 @@
             <form id="pointForm">
                 <div class="fields"><label>이름<input name="name" required></label><label>Pan °<input name="pan"
                             type="number" min="0" max="359.99" step=".01" required></label><label>Tilt °<input
-                            name="tilt" type="number" min="-60" max="60" step=".01" required></label><label>대기 ms<input
-                            name="dwell_ms" type="number" min="0" max="3600000" value="0"></label><label><input
+                            name="tilt" type="number" min="-60" max="60" step=".01" required></label><label><input
                             name="enabled" type="checkbox" checked>사용</label><label>메모<input name="note"></label></div>
                 <div class="toolbar"><button>저장</button><button type="button" id="capture">현재 위치 가져오기</button><button
                         type="button" id="newPoint">새 포인트</button></div>

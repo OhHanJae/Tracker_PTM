@@ -185,6 +185,8 @@ main { max-width: 1564px; margin: 0 auto; padding: 14px 32px 42px; }
 form > label { margin: 12px 0; }
 form > button { margin: 10px 10px 10px 0; }
 .toolbar { padding: 10px 0; }
+.recipe-toolbar .recipe-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.recipe-toolbar .recipe-test-actions { margin-left: auto; }
 .readouts { display: flex; gap: 12px; margin-bottom: 12px; }
 .readouts label { min-width: 140px; display: block; padding: 14px; background: var(--panel-soft); border: 1px solid #e6ebef; border-radius: 10px; }
 .readouts output { display: block; margin-top: 6px; padding: 0; color: #2165c5; font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }

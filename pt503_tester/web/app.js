@@ -2044,7 +2044,6 @@ function renderPoints()
     $('recipeDescription').textContent = recipe
         ? `ID ${recipe.index} · 제품 회전 ${recipe.product_rotation_deg || 0}° / 틸팅 ${recipe.product_tilt_deg || 0}°${recipe.description ? ` · ${recipe.description}` : ''}`
         : '';
-    $('recipePoseStatus').textContent = '이동 없이 선택 포인트의 보정값을 확인합니다.';
 
 
     selectedPoint();
@@ -2108,8 +2107,6 @@ function renderPoints()
                         }
                         return `추정 X ${Number(estimate.x).toFixed(3)} / Y ${Number(estimate.y).toFixed(3)} ${estimate.units} (${estimate.coordinate_frame})\nZ 미확정: ${estimate.z_reason}`;
                     })(),
-
-                    point.dwell_ms,
 
                     point.enabled
                         ? 'ON'
@@ -2512,22 +2509,6 @@ $('deleteManagedRecipe').onclick = guarded(async () => {
     renderRecipeManager(selected()?.id || null);
 });
 
-$('previewRecipePose').onclick = guarded(async () => {
-    const recipe = selected();
-    const point = selectedPoint();
-    if (!recipe || !point)
-    {
-        throw Error('미리 볼 레시피 포인트를 선택하세요.');
-    }
-    const result = await cmd('recipe.pose_preview', {
-        recipe_id: recipe.id,
-        point_id: point.id
-    }, true);
-    const correction = result.pose_correction;
-    $('recipePoseStatus').textContent = correction
-        ? `보정 Pan ${result.pan.toFixed(2)}° / Tilt ${result.tilt.toFixed(2)}° · 회전축 ${correction.rotation_axis}, 틸팅축 ${correction.tilt_axis}${correction.z_certified ? '' : ' · CAD Z 미인증: 추정값'}`
-        : `기준 자세 Pan ${result.pan.toFixed(2)}° / Tilt ${result.tilt.toFixed(2)}°`;
-});
 $('runRecipeSequence').onclick =
     guarded(
         runRecipeSequenceTest
@@ -2566,6 +2547,10 @@ $('pointForm').onsubmit =
                     ...formData(
                         event.target
                     ),
+
+                    dwell_ms:
+                        selected().points.find(point => point.id === editId)?.dwell_ms
+                        ?? 0,
 
                     recipe_id:
                         selected().id,
