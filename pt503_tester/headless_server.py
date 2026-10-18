@@ -120,12 +120,14 @@ LASER_COIL_ADDRESS = 0x0000
 LASER_RESPONSE_TIMEOUT_S = 0.35
 LASER_API_COMMANDS = {
     'power_save.wake',
+    'power_save.settings',
     'laser.power_save',
     'laser.settings',
     'laser.serial_connect',
     'laser.serial_disconnect',
     'laser.status',
 }
+PTM_SETTINGS_COMMANDS = {'ptm.settings'}
 DRAWING_API_COMMANDS = {
     'drawing.list',
     'drawing.get',
@@ -193,6 +195,9 @@ class HeadlessController:
         self.last_tx: dict[str, Any] | None = None
         self.completion_config = {"tolerance_deg": 0.2, "stable_samples": 3, "timeout_s": 30}
         self.monitor_config = {"enabled": False, "interval_ms": 500}
+        self.device_settings = {"invert_pan": False, "invert_tilt": False, "power_on_home": None}
+        self._power_on_home_sent = False
+        self._power_on_home_error = ""
         self.laser_bypass = False
         self.laser_on = False
         self._laser_automatic_off = False
@@ -350,6 +355,11 @@ class HeadlessController:
             self._laser_backend = laser_settings["backend"]
         if isinstance(laser_settings, dict) and isinstance(laser_settings.get("bypass"), bool):
             self.laser_bypass = laser_settings["bypass"]
+        device_settings = payload.get("device") if isinstance(payload, dict) else None
+        if isinstance(device_settings, dict):
+            for key in self.device_settings:
+                if isinstance(device_settings.get(key), bool):
+                    self.device_settings[key] = device_settings[key]
         serial_settings = payload.get("serial") if isinstance(payload, dict) else None
         if not isinstance(serial_settings, dict):
             return
@@ -399,6 +409,7 @@ class HeadlessController:
     def _save_settings(self) -> None:
         payload = {
             "version": 1,
+            "device": dict(self.device_settings),
             "laser": {"bypass": self.laser_bypass, "backend": self._laser_backend,
                       "numbering": "BOARD", "pin": 31, "active_high": True},
             "serial": {
@@ -415,6 +426,65 @@ class HeadlessController:
             encoding="utf-8",
         )
         temporary.replace(self._settings_path)
+
+    def _device_settings_status(self) -> dict[str, Any]:
+        return {**self.device_settings,
+                "power_on_home_sent": self._power_on_home_sent,
+                "power_on_home_error": self._power_on_home_error}
+
+    def _apply_power_on_home(self) -> None:
+        self._power_on_home_sent = False
+        self._power_on_home_error = ""
+        enabled = self.device_settings["power_on_home"]
+        if enabled is None or not self.connected:
+            return
+        try:
+            self.send(power_on_self_check(self._address, enabled), wait_ms=80)
+        except HeadlessApiError as exc:
+            self._power_on_home_error = exc.message
+        else:
+            # This vendor setting has no readback; a sent frame is not firmware confirmation.
+            self._power_on_home_sent = True
+
+    def _core_request(self, command: str, params: dict[str, Any], *,
+                      host: str | None = None, port: int | None = None,
+                      timeout_s: float = CORE_WAKE_TIMEOUT_S,
+                      error_code: str = "CORE_SETTINGS_FAILED") -> dict[str, Any]:
+        host = host or os.environ.get("PT503_CORE_HOST", "127.0.0.1")
+        port = port if port is not None else int(os.environ.get("PT503_CORE_PORT", "8000"))
+        try:
+            request_id = uuid.uuid4().hex
+            request = {"id": request_id, "command": command, "params": params}
+            deadline = time.monotonic() + timeout_s
+            with socket.create_connection((host, port), timeout=timeout_s) as connection:
+                connection.settimeout(max(0.001, deadline - time.monotonic()))
+                connection.sendall((json.dumps(request) + "\n").encode("utf-8"))
+                buffered = bytearray()
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("Core response timed out")
+                    if b"\n" in buffered:
+                        line, _, rest = buffered.partition(b"\n")
+                        buffered = bytearray(rest)
+                        if len(line) > MAX_TCP_LINE_BYTES:
+                            raise ValueError("Core response is too large")
+                        response = json.loads(line)
+                        if not isinstance(response, dict) or response.get("id") != request_id:
+                            continue
+                        if response.get("ok") is not True:
+                            error = response.get("error")
+                            raise ValueError(error.get("message", str(error)) if isinstance(error, dict) else str(error))
+                        return response.get("result") or {}
+                    if len(buffered) > MAX_TCP_LINE_BYTES:
+                        raise ValueError("Core response is too large")
+                    connection.settimeout(remaining)
+                    chunk = connection.recv(min(4096, MAX_TCP_LINE_BYTES + 1 - len(buffered)))
+                    if not chunk:
+                        raise ValueError("Core closed before the response")
+                    buffered.extend(chunk)
+        except (OSError, ValueError) as exc:
+            raise HeadlessApiError(error_code, str(exc)) from exc
 
     def shutdown(self) -> None:
         self._shutdown.set()
@@ -837,6 +907,7 @@ class HeadlessController:
     def close(self) -> None:
         """Close PT-503 serial only. Laser uses its own serial port."""
         with self._lock:
+            self._power_on_home_sent = False
             self._jog_next_resend = 0.0
             self._active_jog = None
             self._jog_owner_client_id = None
@@ -890,6 +961,7 @@ class HeadlessController:
                 },
                 "homed": self._home_valid,
                 "monitor": dict(self.monitor_config),
+                "settings": self._device_settings_status(),
                 "auto_reconnect": {
                     **dict(self.auto_reconnect_config),
                     "scanning": self._auto_scan_active,
@@ -974,7 +1046,8 @@ class HeadlessController:
                 self.auto_reconnect_config["first_address"] = int(address)
                 self.auto_reconnect_config["last_address"] = int(address)
             self._save_settings()
-            return {"connected": True, "port": port, "baudrate": baudrate, "address": address}
+            self._apply_power_on_home()
+            return {"connected": self.connected, "port": port, "baudrate": baudrate, "address": address}
 
     def disconnect(self) -> dict[str, Any]:
         with self._lock:
@@ -1128,7 +1201,7 @@ class HeadlessController:
 
     @staticmethod
     def protocol_catalog() -> dict[str, Any]:
-        return api_protocol_catalog(tuple(sorted(set(SUPPORTED_COMMANDS) | LASER_API_COMMANDS | DRAWING_API_COMMANDS)))
+        return api_protocol_catalog(tuple(sorted(set(SUPPORTED_COMMANDS) | LASER_API_COMMANDS | DRAWING_API_COMMANDS | PTM_SETTINGS_COMMANDS)))
 
     def send(
         self,
@@ -1321,42 +1394,29 @@ class HeadlessController:
                         raise
                 return {"sleeping": enabled, "laser_on": self.laser_on,
                         "manual_override": preserve_manual, "manual_allowed": allowed}
+        if command == "power_save.settings":
+            # Core may reconnect PTM while applying configuration. Do not hold _lock here.
+            if "timeout_minutes" in params:
+                minutes = self._float(params, "timeout_minutes", minimum=1 / 60, maximum=1440)
+                expected = self._float(params, "expected_timeout_s", minimum=1, maximum=86400)
+                config = self._core_request("monitor.config.apply", {
+                    "patch": {"runtime": {"power_save_timeout_s": minutes * 60}},
+                    "expected": {"runtime.power_save_timeout_s": expected},
+                }, timeout_s=10.0)
+            else:
+                config = self._core_request("get_config", {})
+            try:
+                seconds = float(config["runtime"]["power_save_timeout_s"])
+                if not math.isfinite(seconds) or not 1 <= seconds <= 86400:
+                    raise ValueError("invalid Core power-save timeout")
+            except (KeyError, TypeError, ValueError) as exc:
+                raise HeadlessApiError("CORE_SETTINGS_FAILED", "Core power-save settings are unavailable") from exc
+            return {"timeout_s": seconds, "timeout_minutes": seconds / 60, "managed_by": "Core"}
         if command == "power_save.wake":
-            host = str(params.get("host") or os.environ.get("PT503_CORE_HOST", "127.0.0.1"))
             port = self._int(params, "port", int(os.environ.get("PT503_CORE_PORT", "8000")),
                              minimum=1, maximum=65535)
-            try:
-                request_id = uuid.uuid4().hex
-                request = {"id": request_id, "command": "power_save.wake", "params": {}}
-                deadline = time.monotonic() + CORE_WAKE_TIMEOUT_S
-                with socket.create_connection((host, port), timeout=CORE_WAKE_TIMEOUT_S) as connection:
-                    connection.settimeout(max(0.001, deadline - time.monotonic()))
-                    connection.sendall((json.dumps(request) + "\n").encode("utf-8"))
-                    buffered = bytearray()
-                    while True:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise TimeoutError("Core wake response timed out")
-                        if b"\n" in buffered:
-                            line, _, rest = buffered.partition(b"\n")
-                            buffered = bytearray(rest)
-                            if len(line) > MAX_TCP_LINE_BYTES:
-                                raise ValueError("Core response is too large")
-                            response = json.loads(line)
-                            if not isinstance(response, dict) or response.get("id") != request_id:
-                                continue
-                            if response.get("ok") is not True:
-                                raise ValueError(str(response.get("error")))
-                            return response.get("result") or {}
-                        if len(buffered) > MAX_TCP_LINE_BYTES:
-                            raise ValueError("Core response is too large")
-                        connection.settimeout(remaining)
-                        chunk = connection.recv(min(4096, MAX_TCP_LINE_BYTES + 1 - len(buffered)))
-                        if not chunk:
-                            raise ValueError("Core closed before the wake response")
-                        buffered.extend(chunk)
-            except (OSError, ValueError) as exc:
-                raise HeadlessApiError("CORE_WAKE_FAILED", str(exc)) from exc
+            return self._core_request("power_save.wake", {}, host=str(params.get("host") or "") or None,
+                                      port=port, error_code="CORE_WAKE_FAILED")
         # Scan cancellation and status must stay available during discovery.
         if command == "serial.scan_cancel":
             self._scan_cancel.set()
@@ -1567,6 +1627,10 @@ class HeadlessController:
                     raise HeadlessApiError("INVALID_PARAMS", "jog_token requires a lease and 1..128 characters")
                 pan = {"left": PanDirection.LEFT, "right": PanDirection.RIGHT, "stop": PanDirection.STOP}[self._enum(params, "pan", {"left", "right", "stop"}, "stop")]
                 tilt = {"up": TiltDirection.UP, "down": TiltDirection.DOWN, "stop": TiltDirection.STOP}[self._enum(params, "tilt", {"up", "down", "stop"}, "stop")]
+                if self.device_settings["invert_pan"]:
+                    pan = {PanDirection.LEFT: PanDirection.RIGHT, PanDirection.RIGHT: PanDirection.LEFT}.get(pan, pan)
+                if self.device_settings["invert_tilt"]:
+                    tilt = {TiltDirection.UP: TiltDirection.DOWN, TiltDirection.DOWN: TiltDirection.UP}.get(tilt, tilt)
                 if "speed_level" in params:
                     level = self._int(params, "speed_level", 5, minimum=1, maximum=8)
                     pl = tl = level
@@ -1755,6 +1819,28 @@ class HeadlessController:
             return result
 
     def _command_impl(self, command: str, params: dict[str, Any]) -> dict[str, Any]:
+        if command == "ptm.settings":
+            updated = dict(self.device_settings)
+            for key in updated:
+                if key in params:
+                    updated[key] = None if key == "power_on_home" and params[key] is None else self._bool(params, key)
+            if updated == self.device_settings:
+                return self._device_settings_status()
+            if self._active_jog is not None or self._pending_motion is not None:
+                raise HeadlessApiError("BUSY", "Stop motion before saving PTM settings")
+            home_changed = updated["power_on_home"] != self.device_settings["power_on_home"]
+            if home_changed:
+                self._require_confirm(params)
+            previous = self.device_settings
+            self.device_settings = updated
+            try:
+                self._save_settings()
+            except OSError:
+                self.device_settings = previous
+                raise
+            if home_changed:
+                self._apply_power_on_home()
+            return self._device_settings_status()
         if command == "system.ping":
             return {"protocol": PROTOCOL_NAME, "version": PROTOCOL_VERSION, "time": time.time()}
         if command == "laser.settings":
@@ -1781,7 +1867,7 @@ class HeadlessController:
         if command == "system.status":
             return self.status()
         if command == "system.commands":
-            return {"commands": sorted(set(SUPPORTED_COMMANDS) | LASER_API_COMMANDS | DRAWING_API_COMMANDS)}
+            return {"commands": sorted(set(SUPPORTED_COMMANDS) | LASER_API_COMMANDS | DRAWING_API_COMMANDS | PTM_SETTINGS_COMMANDS)}
         if command == "protocol.catalog":
             return self.protocol_catalog()
         if command == "serial.ports":
@@ -2379,7 +2465,7 @@ class WebHandler(BaseHTTPRequestHandler):
                     return
                 self._send_bytes(asset.read_bytes(), content_type)
             elif path == "/templates.js":
-                catalog_commands = tuple(sorted(set(SUPPORTED_COMMANDS) | LASER_API_COMMANDS | DRAWING_API_COMMANDS))
+                catalog_commands = tuple(sorted(set(SUPPORTED_COMMANDS) | LASER_API_COMMANDS | DRAWING_API_COMMANDS | PTM_SETTINGS_COMMANDS))
                 catalog = self.controller.protocol_catalog()
                 payload = (
                     "window.protocolTemplates="

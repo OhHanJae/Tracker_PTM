@@ -30,6 +30,33 @@
                     id="scanCancel">탐색 중지</button></section>
             <p>포트 설정은 서버에 저장되며 새로고침 및 서버 재시작 후에도 유지됩니다. COM 장치는 서버만 사용합니다.</p>
         </section>
+        <section id="settings" class="page" hidden>
+            <h2>설정</h2>
+            <div class="columns">
+                <section>
+                    <h3>PTM 동작 설정</h3>
+                    <form id="ptmSettings">
+                        <div class="fields">
+                            <label><input id="settingInvertPan" type="checkbox">팬 방향 반전</label>
+                            <label><input id="settingInvertTilt" type="checkbox">틸트 방향 반전</label>
+                            <label>전원 ON 시 호밍<select id="settingPowerOnHome"><option value="">장치 기존 설정 유지</option><option value="true">사용</option><option value="false">해제</option></select></label>
+                        </div>
+                        <button>PTM 설정 저장</button><output id="ptmSettingsState">서버 설정을 불러오는 중</output>
+                    </form>
+                    <p>방향 반전은 수동 버튼과 게임패드 JOG에 공통 적용되며 절대좌표와 레시피 좌표는 유지됩니다.</p>
+                    <p>전원 ON 호밍은 지원 펌웨어의 전원 인가 Self-check 설정입니다. 연결 중에는 즉시 설정 명령을 전송하고, 연결 전 저장하면 다음 연결 시 전송합니다. 장치가 설정을 지원하는지는 실제 전원 재인가로 확인하세요.</p>
+                </section>
+                <section>
+                    <h3>레이저 절전 시간</h3>
+                    <form id="powerSaveSettings">
+                        <label>대기 시간 (분)<input id="powerSaveMinutes" type="number" min="0.0166666667" max="1440" step="any" required disabled></label>
+                        <button id="savePowerSaveSettings" disabled>절전 시간 저장</button>
+                    </form>
+                    <button id="loadPowerSaveSettings">Core 설정 불러오기</button><output id="powerSaveSettingsState">Core 설정을 불러오면 편집할 수 있습니다.</output>
+                    <p>Core의 공통 절전 시간을 저장하며 레이저와 Vision에 함께 적용됩니다. PLC 운전과 모터 동작을 중지한 상태에서 저장하세요. PTM 단독 실행 시에는 Core 연결이 필요합니다.</p>
+                </section>
+            </div>
+        </section>
         <section id="manual" class="page">
             <div class="columns">
                 <section>
