@@ -16,4 +16,5 @@ tests
 !/tests/test_drawing_recipes.py
 !/tests/test_drawing_management.py
 !/tests/test_laser_states.py
+!/tests/test_manual_laser_motion.py
 !/tests/test_drawing_workflow.cjs

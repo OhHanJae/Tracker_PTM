@@ -1085,7 +1085,7 @@ $('scanCancel').onclick =
 // Pan / Tilt STOP
 // ============================================================================
 
-async function stopJog()
+async function stopJog(preserveLaserManual = false)
 {
     jog =
         null;
@@ -1140,7 +1140,7 @@ async function stopJog()
     {
         await cmd(
             'motion.stop',
-            {},
+            {preserve_laser_manual: preserveLaserManual === true},
             true
         );
     }
@@ -1227,7 +1227,7 @@ document
         // arbitration even while the operator is still holding the control.
         element.addEventListener(
             'pointerup',
-            guarded(stopJog)
+            guarded(() => stopJog(true))
         );
     });
 
@@ -7047,7 +7047,7 @@ async function gotoSelectedPoint()
     }
 
 
-    await stopJog();
+    await stopJog(true);
 
 
     await cmd(
@@ -7070,7 +7070,7 @@ async function gotoSelectedPoint()
 
 async function gotoHome()
 {
-    await stopJog();
+    await stopJog(true);
 
 
     await cmd(
@@ -7903,7 +7903,7 @@ setInterval(
                         () =>
                             cmd(
                                 'motion.stop',
-                                {},
+                                {preserve_laser_manual: true},
                                 true
                             )
                     )();

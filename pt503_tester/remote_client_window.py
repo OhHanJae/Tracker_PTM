@@ -155,7 +155,7 @@ class RemoteClientWindow(QMainWindow):
                 button.clicked.connect(self._stop_motion)
             else:
                 button.pressed.connect(lambda p=pan, t=tilt: self._start_jog(p, t))
-                button.released.connect(self._stop_motion)
+                button.released.connect(lambda: self._stop_motion(preserve_laser_manual=True))
             move_layout.addWidget(button, row, column)
         self.target_pan = QDoubleSpinBox()
         self.target_pan.setRange(0.0, 359.99)
@@ -497,12 +497,12 @@ class RemoteClientWindow(QMainWindow):
             quiet=True,
         )
 
-    def _stop_motion(self) -> None:
+    def _stop_motion(self, *, preserve_laser_manual: bool = False) -> None:
         self._current_jog = None
         self._gamepad_motion = None
         self._gamepad_center_since = None
         self.jog_timer.stop()
-        self._send_command("motion.stop", {}, quiet=True)
+        self._send_command("motion.stop", {"preserve_laser_manual": preserve_laser_manual}, quiet=True)
 
     def _goto_absolute(self) -> None:
         self._send_command(
@@ -552,7 +552,7 @@ class RemoteClientWindow(QMainWindow):
                 if self._gamepad_center_since is None:
                     self._gamepad_center_since = now
                 elif now - self._gamepad_center_since >= 0.20:
-                    self._stop_motion()
+                    self._stop_motion(preserve_laser_manual=True)
             else:
                 self._gamepad_center_since = None
         else:
@@ -593,7 +593,7 @@ class RemoteClientWindow(QMainWindow):
         if self._button_edge(gamepad_map.BUTTON_STOP, buttons):
             self._stop_motion()
         if self._button_edge(gamepad_map.BUTTON_HOME, buttons):
-            self._stop_motion()
+            self._stop_motion(preserve_laser_manual=True)
             self._send_command("motion.absolute", {"pan": 0, "tilt": 0})
         if self._button_edge(gamepad_map.BUTTON_LASER_TOGGLE, buttons):
             self._send_command("laser.off" if self._laser_on else "laser.on", {})

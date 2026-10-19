@@ -1597,8 +1597,10 @@ class HeadlessController:
                                     "pelco.", "lens.", "aux.", "camera.", "maintenance.", "zero."))
                     or command in {"point.goto", "serial.connect", "serial.disconnect", "raw.send"}
                     or command in set(protocol_named_command_names()) - {"magnification.query", "device.query_diagnostics"}):
-                preserve_manual = (command == "motion.stop" and params.get("preserve_laser_manual") is True
-                                   and bool(self._laser_manual_deadline))
+                preserve_manual = (command in {"motion.jog", "motion.absolute", "motion.relative",
+                                               "motion.goto", "point.goto", "home.start"}
+                                   or (command == "motion.stop" and params.get("preserve_laser_manual") is True))
+                preserve_manual = preserve_manual and bool(self._laser_manual_deadline)
                 preserve_manual |= (command == "motion.stop" and "jog_token" in params
                                     and (self._active_jog is None or params["jog_token"] != self._jog_token))
                 preserve_manual |= command in {"motion.completion_config", "motion.tolerance"} and not params
@@ -1651,12 +1653,14 @@ class HeadlessController:
                 target, correction = self._recipe_motion_target(recipe_id, point)
                 with self._laser_lock:
                     auto_laser = (self._bool(params, "laser_after_move", True)
+                                  and not self._laser_manual_deadline
                                   and not self._power_saving and not self._laser_automatic_off
                                   and self._laser_manual_allowed
                                   and (self._laser_backend == "gpio" or self.laser_connected))
                     if "laser_permit_token" in params:
                         auto_laser = auto_laser and params["laser_permit_token"] == self._laser_generation
-                    if not self.laser_bypass and (self._laser_backend == "gpio" or self.laser_connected):
+                    if (not self._laser_manual_deadline and not self.laser_bypass
+                            and (self._laser_backend == "gpio" or self.laser_connected)):
                         self._laser_write_coil(False)
                     laser_generation = self._laser_generation
                 result = self.command(
