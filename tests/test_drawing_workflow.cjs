@@ -23,6 +23,7 @@ function runtime() {
             return elements.get(id);
         },
         guarded: fn => fn,
+        drawingAction: fn => fn,
         selectedDrawingPoint: () => ctx.activeDrawing?.points?.find(point => point.id === ctx.selectedDrawingPointId),
         loadDrawingPoseInputs() {}, async loadRecipes() {},
         renderDrawingPanel() {ctx.renderDrawingRecipeSelector();},

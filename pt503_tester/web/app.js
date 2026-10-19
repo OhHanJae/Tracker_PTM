@@ -79,6 +79,7 @@ let drawingFacesForPick = [];
 let drawingProgressTimer = null;
 let drawingRedrawFrame = null;
 let drawingDragPointId = null;
+let drawingActionBusy = false;
 let drawingView = {
     yaw: -35,
     pitch: 22,
@@ -499,8 +500,11 @@ async function cmd(
                 result
             );
 
-            $('notice').textContent =
-                command + ' 완료';
+            if (!drawingActionBusy)
+            {
+                $('notice').dataset.kind = 'success';
+                $('notice').textContent = command + ' 완료';
+            }
         }
 
 
@@ -508,6 +512,7 @@ async function cmd(
     }
     catch (error)
     {
+        $('notice').dataset.kind = 'error';
         $('notice').textContent =
             error.message;
 
@@ -532,17 +537,75 @@ function guarded(fn)
                     fn(...args)
                 )
                 .catch(error => {
-
+                    $('notice').dataset.kind = 'error';
                     $('notice').textContent =
                         error.message;
                 });
         }
         catch (error)
         {
+            $('notice').dataset.kind = 'error';
             $('notice').textContent =
                 error.message;
         }
     };
+}
+
+
+function drawingAction(fn, options)
+{
+    return guarded(async event => {
+        if (drawingActionBusy) return;
+        const feedback = typeof options === 'function' ? options() : options;
+        const trigger = feedback.buttonId ? $(feedback.buttonId) : event?.currentTarget;
+        const button = trigger?.tagName === 'BUTTON' ? trigger : null;
+        const originalText = button?.textContent;
+        const controls = Array.from(document.querySelectorAll(
+            '#drawings .drawing-calibration-actions button, #drawingPoints input, #drawingPointSets input, ' +
+            '#loadDrawing, #manageDrawings, #drawingSelect, #drawingActiveRecipe, #newDrawingRecipe, ' +
+            '#drawingProductRotation, #drawingProductTilt, #drawingRecipeDialog button, ' +
+            '#drawingRecipeDialog input, #drawingRecipeDialog select, #drawingManagerDialog button, #drawingManagerDialog input'));
+        const disabled = controls.map(control => [control, control.disabled]);
+        const show = (message, kind) => {
+            for (const element of [$('notice'), $(feedback.statusId || 'drawingStatus')])
+            {
+                if (!element) continue;
+                element.textContent = message;
+                element.dataset.kind = kind;
+                element.setAttribute('aria-busy', String(kind === 'busy'));
+            }
+        };
+        drawingActionBusy = true;
+        for (const control of controls) control.disabled = true;
+        if (button)
+        {
+            button.textContent = feedback.pending;
+            button.setAttribute('aria-busy', 'true');
+        }
+        show(feedback.pending, 'busy');
+        try
+        {
+            const result = await fn(event);
+            show(result === false ? '작업을 취소했습니다.' : feedback.done, result === false ? 'info' : 'success');
+            return result;
+        }
+        catch (error)
+        {
+            show(`작업 실패: ${error.message}`, 'error');
+            throw error;
+        }
+        finally
+        {
+            drawingActionBusy = false;
+            for (const [control, value] of disabled) control.disabled = value;
+            if (button)
+            {
+                if (button.textContent === feedback.pending) button.textContent = originalText;
+                button.removeAttribute('aria-busy');
+            }
+            renderDrawingRecipeSelector();
+        }
+    });
 }
 
 
@@ -3216,7 +3279,7 @@ function renderDrawingManager()
         const rename = document.createElement('button');
         rename.type = 'button';
         rename.textContent = '이름 저장';
-        rename.onclick = guarded(async () => {
+        rename.onclick = drawingAction(async () => {
             const result = await cmd('drawing.update', {drawing_id: drawing.id, name: title.value}, true);
             if (activeDrawing?.id === drawing.id)
             {
@@ -3225,7 +3288,7 @@ function renderDrawingManager()
             }
             await loadDrawings();
             renderDrawingManager();
-        });
+        }, {pending: '도면 이름 저장 중…', done: '도면 이름을 저장했습니다.', statusId: 'drawingManagerStatus'});
         const files = document.createElement('p');
         files.textContent = [drawing.source_filename, ...(drawing.attachment_filenames || [])]
             .filter(Boolean)
@@ -3234,10 +3297,10 @@ function renderDrawingManager()
         const action = document.createElement('button');
         action.type = 'button';
         action.textContent = '삭제';
-        action.onclick = guarded(async () => {
+        action.onclick = drawingAction(async () => {
             if (!confirm(`${drawing.name} 도면과 포인트 파일을 삭제할까요?`))
             {
-                return;
+                return false;
             }
             await cmd('drawing.delete', {drawing_id: drawing.id}, true);
             if (activeDrawing?.id === drawing.id)
@@ -3248,11 +3311,11 @@ function renderDrawingManager()
             }
             await loadDrawings();
             renderDrawingManager();
-        });
+        }, {pending: '도면 삭제 중…', done: '도면을 삭제했습니다.', statusId: 'drawingManagerStatus'});
         const download = document.createElement('button');
         download.type = 'button';
         download.textContent = 'ZIP 내보내기';
-        download.onclick = guarded(async () => {
+        download.onclick = drawingAction(async () => {
             const response = await fetch(`/api/drawings/${encodeURIComponent(drawing.id)}/archive`);
             if (!response.ok) throw Error('도면 ZIP 내보내기에 실패했습니다.');
             const url = URL.createObjectURL(await response.blob());
@@ -3261,7 +3324,7 @@ function renderDrawingManager()
             link.download = `${drawing.name.replace(/[\\/:*?"<>|]/g, '_')}_PTM.zip`;
             link.click();
             setTimeout(() => URL.revokeObjectURL(url), 1000);
-        });
+        }, {pending: '도면 ZIP 내보내는 중…', done: '도면 ZIP 다운로드를 시작했습니다.', statusId: 'drawingManagerStatus'});
         const actions = document.createElement('div');
         actions.className = 'toolbar';
         for (const [label, delta] of [['위로', -1], ['아래로', 1]])
@@ -3270,13 +3333,13 @@ function renderDrawingManager()
             button.type = 'button';
             button.textContent = label;
             button.disabled = index + delta < 0 || index + delta >= drawings.length;
-            button.onclick = guarded(async () => {
+            button.onclick = drawingAction(async () => {
                 const ids = drawings.map(item => item.id);
                 [ids[index], ids[index + delta]] = [ids[index + delta], ids[index]];
                 await cmd('drawing.reorder', {ordered_ids: ids}, true);
                 await loadDrawings();
                 renderDrawingManager();
-            });
+            }, {pending: '도면 순서 저장 중…', done: '도면 순서를 저장했습니다.', statusId: 'drawingManagerStatus'});
             actions.append(button);
         }
         actions.append(rename, download, action);
@@ -3298,7 +3361,7 @@ async function loadDrawing(id = activeDrawingId())
 {
     if (!id)
     {
-        return;
+        throw Error('불러올 도면을 선택하세요.');
     }
 
 
@@ -3326,9 +3389,9 @@ async function loadDrawing(id = activeDrawingId())
 
     loadDrawingPoseInputs();
     renderDrawingPanel();
-    window.dispatchEvent(new CustomEvent('drawing-cad-load', {
-        detail: {drawing: activeDrawing}
-    }));
+    const detail = {drawing: activeDrawing};
+    window.dispatchEvent(new CustomEvent('drawing-cad-load', {detail}));
+    if (detail.ready) await detail.ready;
 
     setDrawingStatus(
         '도면 로드 완료'
@@ -5076,9 +5139,9 @@ function renderDrawingRecipeSelector()
     updateDrawingMoveControls();
 }
 
-$('drawingActiveRecipe').onchange = guarded(async () => {
+$('drawingActiveRecipe').onchange = drawingAction(async () => {
     const recipeId = $('drawingActiveRecipe').value;
-    if (!recipeId) return;
+    if (!recipeId) return false;
     $('drawingActiveRecipe').disabled = true;
     try
     {
@@ -5090,18 +5153,18 @@ $('drawingActiveRecipe').onchange = guarded(async () => {
     {
         renderDrawingPanel();
     }
-});
+}, {pending: '그룹 레시피 불러오는 중…', done: '그룹 레시피를 불러왔습니다.'});
 
-$('newDrawingRecipe').onclick = guarded(async () => {
+$('newDrawingRecipe').onclick = drawingAction(async () => {
     await ensureDrawingWorkflow();
     const name = prompt('이 그룹에서 사용할 새 레시피 이름');
-    if (!name?.trim()) return;
+    if (!name?.trim()) return false;
     const created = await cmd('recipe.upsert', {name: name.trim()}, true);
     await activateDrawingRecipe(created.recipe.id);
     await loadRecipes(created.recipe.id);
     loadDrawingPoseInputs();
     renderDrawingPanel();
-});
+}, {pending: '새 레시피 생성 중…', done: '새 레시피를 생성했습니다.'});
 
 
 function renderDrawingPointSets()
@@ -5121,7 +5184,7 @@ function renderDrawingPointSets()
         radio.name = 'drawingPointSet';
         radio.value = pointSet.file;
         radio.checked = pointSet.file === activeDrawing.selected_point_file;
-        radio.onchange = guarded(async () => {
+        radio.onchange = drawingAction(async () => {
             for (const item of document.querySelectorAll('input[name="drawingPointSet"]'))
             {
                 item.disabled = true;
@@ -5140,7 +5203,7 @@ function renderDrawingPointSets()
             {
                 renderDrawingPanel();
             }
-        });
+        }, {pending: '도면 포인트 그룹 불러오는 중…', done: '도면 포인트 그룹을 불러왔습니다.'});
         const text = document.createElement('span');
         text.textContent = `${pointSet.name || pointSet.file} · ${pointSet.point_count}개` +
             (pointSet.requires_process_review ? ' · 검토 필요' : '');
@@ -5683,7 +5746,7 @@ async function resetDrawingCalibration()
         ? '선택한 레시피의 Pan/Tilt 값과 캘리브레이션 기준을 지울까요?'
         : '이 도면의 모든 포인트 그룹에서 Pan/Tilt 값과 캘리브레이션 기준을 지울까요?'))
     {
-        return;
+        return false;
     }
     const result = await cmd('drawing.reset_calibration', {
         drawing_id: activeDrawing.id
@@ -5897,6 +5960,7 @@ function openDrawingRecipeDialog(mode)
         throw Error('도면을 먼저 선택하세요.');
     }
     drawingRecipeMode = mode;
+    $('drawingRecipeStatus').textContent = '';
     $('drawingRecipeDialogTitle').textContent =
         mode === 'export' ? '레시피로 저장' : '레시피에서 불러오기';
     $('drawingRecipeSelect').replaceChildren(
@@ -5948,18 +6012,22 @@ async function confirmDrawingRecipe()
 
 
 $('loadDrawing').onclick =
-    guarded(
-        () => loadDrawing()
+    drawingAction(
+        () => loadDrawing(),
+        {pending: '도면 불러오는 중…', done: '도면 준비가 완료되었습니다.', buttonId: 'loadDrawing'}
     );
 
 
 $('drawingSelect').onchange =
-    guarded(
-        () => loadDrawing()
+    drawingAction(
+        () => loadDrawing(),
+        {pending: '도면 불러오는 중…', done: '도면 준비가 완료되었습니다.', buttonId: 'loadDrawing'}
     );
 
-$('manageDrawings').onclick = guarded(openDrawingManager);
-$('uploadDrawing').onclick = guarded(uploadDrawingFile);
+$('manageDrawings').onclick = drawingAction(openDrawingManager,
+    {pending: '도면 목록 불러오는 중…', done: '도면 목록을 불러왔습니다.', statusId: 'drawingManagerStatus'});
+$('uploadDrawing').onclick = drawingAction(uploadDrawingFile,
+    {pending: '도면 파일 등록 중…', done: '도면 파일 등록이 완료되었습니다.', statusId: 'drawingManagerStatus'});
 
 
 if ($('drawingRenderMode'))
@@ -6008,32 +6076,37 @@ if ($('drawingHomeView'))
 
 
 $('calibrateDrawing').onclick =
-    guarded(
-        calibrateDrawing
+    drawingAction(
+        calibrateDrawing,
+        {pending: '캘리브레이션 중…', done: '캘리브레이션이 완료되었습니다.'}
     );
 
 
 $('resetDrawingCalibration').onclick =
-    guarded(
-        resetDrawingCalibration
+    drawingAction(
+        resetDrawingCalibration,
+        {pending: '보정 초기화 중…', done: '보정 초기화가 완료되었습니다.'}
     );
 
 
 $('applyCurrentDrawingPoint').onclick =
-    guarded(
-        applyCurrentDrawingPoint
+    drawingAction(
+        applyCurrentDrawingPoint,
+        {pending: '현재 Pan/Tilt 값 적용 중…', done: '현재 Pan/Tilt 값을 적용했습니다.'}
     );
 
 
 $('moveDrawingPoint').onclick =
-    guarded(
-        moveSelectedDrawingPoint
+    drawingAction(
+        moveSelectedDrawingPoint,
+        {pending: '선택 포인트 이동 요청 중…', done: '선택 포인트 이동 명령을 전달했습니다.'}
     );
 
 
 $('toggleCalibrationPoint').onclick =
-    guarded(
-        toggleCalibrationDrawingPoint
+    drawingAction(
+        toggleCalibrationDrawingPoint,
+        {pending: '기준 포인트 설정 중…', done: '기준 포인트 설정을 저장했습니다.'}
     );
 
 
@@ -6050,8 +6123,11 @@ $('importDrawingRecipe').onclick =
 
 
 $('confirmDrawingRecipe').onclick =
-    guarded(
-        confirmDrawingRecipe
+    drawingAction(
+        confirmDrawingRecipe,
+        () => ({pending: drawingRecipeMode === 'export' ? '레시피로 내보내는 중…' : '레시피에서 불러오는 중…',
+            done: drawingRecipeMode === 'export' ? '레시피로 내보내기가 완료되었습니다.' : '레시피에서 불러오기가 완료되었습니다.',
+            statusId: 'drawingRecipeStatus'})
     );
 
 

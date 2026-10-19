@@ -137,7 +137,7 @@
                 <select id="drawingSelect" aria-label="도면 선택"></select>
                 <button id="loadDrawing" type="button">도면 선택</button>
                 <button id="manageDrawings" type="button">도면 관리</button>
-                <output id="drawingStatus">data/drawning 도면을 선택하세요.</output>
+                <output id="drawingStatus" class="action-feedback" role="status" aria-live="polite">data/drawning 도면을 선택하세요.</output>
             </div>
             <div class="drawing-calibration-layout">
                 <section class="drawing-view-panel">
@@ -198,6 +198,7 @@
                     <h2 id="drawingRecipeDialogTitle">레시피 선택</h2>
                     <label>기존 레시피<select id="drawingRecipeSelect"></select></label>
                     <label id="drawingNewRecipeLabel">새 레시피 이름<input id="drawingNewRecipeName" placeholder="비우면 기존 레시피 사용"></label>
+                    <p id="drawingRecipeStatus" class="action-feedback" role="status" aria-live="polite"></p>
                     <div class="toolbar"><button id="confirmDrawingRecipe" value="confirm" type="button">확인</button><button value="cancel">취소</button></div>
                 </form>
             </dialog>
@@ -211,6 +212,7 @@
                         <input id="drawingFile" type="file" accept=".zip,.glb,.json" multiple>
                     </label>
                     <div class="toolbar"><button id="uploadDrawing" type="button">파일 등록</button></div>
+                    <p id="drawingManagerStatus" class="action-feedback" role="status" aria-live="polite"></p>
                     <section id="drawingProgressPanel" class="drawing-progress" hidden>
                         <div class="drawing-progress-head"><strong id="drawingProgressStage">대기</strong><span id="drawingProgressPercent">0%</span></div>
                         <progress id="drawingProgressBar" max="100" value="0"></progress>

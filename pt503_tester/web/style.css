@@ -176,6 +176,17 @@ nav button[aria-selected=true]::before { color: var(--accent); }
     overflow-wrap: anywhere;
 }
 #notice:empty { display: none; }
+.action-feedback { margin:0; color:#2165c5; font-size:12px; font-weight:600; overflow-wrap:anywhere; }
+.action-feedback:empty { display:none; }
+button[aria-busy="true"]:disabled { opacity:1; cursor:progress; }
+#notice[data-kind="busy"], .action-feedback[data-kind="busy"] { color:#2165c5; }
+#notice[data-kind="busy"] { background:#edf5ff; border-color:#c6ddfa; }
+#notice[data-kind="error"], .action-feedback[data-kind="error"] { color:#b23636; }
+#notice[data-kind="error"] { background:#fff1f1; border-color:#efc6c6; }
+.action-feedback[data-kind="success"] { color:#0b8a5b; }
+button[aria-busy="true"]::before, .action-feedback[data-kind="busy"]::before { content:""; display:inline-block; width:12px; height:12px; margin-right:6px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; vertical-align:-2px; animation:action-spin .8s linear infinite; }
+@keyframes action-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { button[aria-busy="true"]::before, .action-feedback::before { animation:none; } }
 main { max-width: 1564px; margin: 0 auto; padding: 14px 32px 42px; }
 .page { width: 100%; padding: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
 .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
@@ -320,6 +331,7 @@ body:has(#drawings:not([hidden])) > main { flex: 1; min-height: 0; width: 100%; 
 .cad-groups { display: grid; gap: 6px; margin: 10px 0; }
 .cad-group { display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
 .cad-stage { position: relative; min-width: 0; min-height: 620px; overflow: hidden; background: #050b11; border: 1px solid #263541; border-radius: 10px; }
+.cad-stage[aria-busy="true"]::after { content:"3D 도면을 불러오는 중…"; position:absolute; inset:0; display:grid; place-items:center; background:#101820d9; color:#fff; font-size:14px; z-index:3; }
 #cadCanvas, #cadPointLayer { position: absolute; inset: 0; width: 100%; height: 100%; }
 #cadCanvas { touch-action: none; }
 #cadPointLayer { pointer-events: none; }

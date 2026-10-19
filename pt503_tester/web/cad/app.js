@@ -98,9 +98,16 @@ async function loadDrawing(drawing)
 }
 
 window.addEventListener('drawing-cad-load', event => {
-    loadDrawing(event.detail?.drawing).catch(error => {
-        byId('drawingStatus').textContent = `CAD 로딩 실패: ${error.message}`;
-    });
+    const stage = byId('cadStage');
+    stage.setAttribute('aria-busy', 'true');
+    const ready = loadDrawing(event.detail?.drawing)
+        .catch(error => {
+            byId('drawingStatus').textContent = `CAD 로딩 실패: ${error.message}`;
+            throw error;
+        })
+        .finally(() => stage.removeAttribute('aria-busy'));
+    if (event.detail) event.detail.ready = ready;
+    ready.catch(() => {});
 });
 
 window.addEventListener('drawing-cad-points', event => {
