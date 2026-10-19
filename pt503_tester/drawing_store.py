@@ -1536,6 +1536,7 @@ class DrawingStore:
                     "model_rendering": dict(manifest.get("model_rendering") or {}),
                     "point_sets": point_sets,
                     "selected_point_file": selected_file,
+                    "selected_recipe_id": str(old.get("selected_recipe_id") or ""),
                     "points_by_file": points_by_file,
                     "calibration_by_file": calibration_by_file,
                     "calibration": calibration_by_file.get(selected_file),

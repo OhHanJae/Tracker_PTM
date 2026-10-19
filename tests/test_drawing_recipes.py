@@ -83,6 +83,27 @@ def test_fvp_groups_and_recipe_calibrations_are_independent(tmp_path):
     assert drawings.select_recipe(drawing_id, first)["points"] == calibrated["points"]
 
 
+def test_seed_package_keeps_selected_recipe_after_server_restart(tmp_path):
+    uploaded, recipes, drawing_id, linked = stores(tmp_path)
+    package_root = tmp_path / "packages"
+    package = package_root / "Seed"
+    (package / "model").mkdir(parents=True)
+    (package / "coordinates").mkdir()
+    assets = uploaded.root / drawing_id
+    (package / "model" / "product.glb").write_bytes((assets / "product.glb").read_bytes())
+    for name in ("coordinates_manifest.json", "group_1.json", "group_2.json", "group_3.json"):
+        (package / "coordinates" / name).write_bytes((assets / name).read_bytes())
+    drawings = DrawingStore(tmp_path / "seed_state", package_root, recipe_store=recipes)
+    seed_id = drawings.list_drawings()[0]["id"]
+    drawings.select_recipe(seed_id, linked[0].id)
+    calibrated = teach(drawings, seed_id)
+    restarted = DrawingStore(drawings.root, package_root, recipe_store=RecipeStore(recipes.path))
+    restored = restarted.get_drawing(seed_id)
+    assert restored["selected_recipe_id"] == linked[0].id
+    assert restored["calibration"] == calibrated["calibration"]
+    assert restored["points"] == calibrated["points"]
+
+
 def test_pose_uses_depth_and_preserves_zero_reference(tmp_path):
     drawings, recipes, drawing_id, linked = stores(tmp_path)
     drawings.select_recipe(drawing_id, linked[0].id)

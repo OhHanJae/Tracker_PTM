@@ -3042,6 +3042,16 @@ async function uploadDrawingFile()
         );
     }
 
+    try
+    {
+        await ensureDrawingWorkflow();
+    }
+    catch (error)
+    {
+        failDrawingProgress(error.message);
+        throw error;
+    }
+
 
     setDrawingStatus(
         '변환 중...'
@@ -4904,17 +4914,60 @@ function compatibleDrawingRecipes()
          recipe.drawing.point_file === activeDrawing?.selected_point_file));
 }
 
+function drawingWorkflowError()
+{
+    return commands.length && !commands.includes('drawing.select_recipe')
+        ? '실행 중인 PTM 서버가 이전 버전입니다. 최신 PTM 파일을 실행 장비에 반영하고 PTM 서버를 완전히 중지한 뒤 다시 실행하세요. 이후 브라우저에서 Ctrl+F5를 누르세요.'
+        : '';
+}
+
+async function ensureDrawingWorkflow()
+{
+    if (!commands.length)
+    {
+        commands = (await cmd('system.commands', {}, true)).commands;
+    }
+    const error = drawingWorkflowError();
+    if (error)
+    {
+        renderDrawingRecipeSelector();
+        throw Error(error);
+    }
+}
+
+async function activateDrawingRecipe(recipeId)
+{
+    await ensureDrawingWorkflow();
+    const result = await cmd('drawing.select_recipe', {drawing_id: activeDrawing.id, recipe_id: recipeId}, true);
+    if (!result.drawing?.selected_recipe_id)
+    {
+        throw Error('PTM 서버가 레시피 연결 정보를 반환하지 않았습니다. 최신 PTM 서버로 재시작하고 Ctrl+F5로 화면을 다시 불러오세요.');
+    }
+    activeDrawing = result.drawing;
+    selectedDrawingPointId = activeDrawing.points?.[0]?.id || null;
+}
+
 function renderDrawingRecipeSelector()
 {
     const select = $('drawingActiveRecipe');
+    if (!select) return;
     const placeholder = new Option('레시피를 선택하세요', '');
     placeholder.disabled = true;
     select.replaceChildren(placeholder,
         ...compatibleDrawingRecipes().map(recipe => new Option(recipe.name, recipe.id)));
     select.value = activeDrawing?.selected_recipe_id || '';
-    select.disabled = !activeDrawing;
-    $('newDrawingRecipe').disabled = !activeDrawing;
-    const disabled = Boolean(activeDrawing?.point_sets?.length && !activeDrawing.selected_recipe_id);
+    const serverError = drawingWorkflowError();
+    if (serverError) $('drawingCalibrationInfo').textContent = '현재 서버에서 레시피별 캘리브레이션 연결을 확인할 수 없습니다. PTM 서버 재시작이 필요합니다.';
+    select.disabled = !activeDrawing || Boolean(serverError);
+    $('newDrawingRecipe').disabled = !activeDrawing || Boolean(serverError);
+    const disabled = Boolean(serverError || (activeDrawing?.point_sets?.length && !activeDrawing.selected_recipe_id));
+    const workflowStatus = $('drawingWorkflowStatus');
+    if (workflowStatus) workflowStatus.textContent = serverError || (!activeDrawing
+        ? '도면을 먼저 선택하세요.'
+        : disabled ? '이 그룹의 레시피를 선택하거나 새 레시피를 만드세요. 연결이 완료되면 티칭·캘리브레이션 버튼이 활성화됩니다.'
+        : activeDrawing.product_rotation_deg || activeDrawing.product_tilt_deg
+            ? '각도 변환·저장은 가능합니다. 기준점 재티칭은 각도를 0°/0°로 되돌리고 캘리브레이션한 뒤 수행하세요.'
+            : '레시피 연결 완료. 포인트를 선택한 후 현재값 적용·기준점 선택·캘리브레이션을 진행하세요.');
     for (const id of ['applyCurrentDrawingPoint', 'toggleCalibrationPoint', 'calibrateDrawing',
                       'resetDrawingCalibration', 'exportDrawingRecipe', 'moveDrawingPoint'])
     {
@@ -4925,25 +4978,33 @@ function renderDrawingRecipeSelector()
         $('applyCurrentDrawingPoint').disabled = true;
         $('toggleCalibrationPoint').disabled = true;
     }
+    if (!selectedDrawingPoint()) $('applyCurrentDrawingPoint').disabled = true;
+    updateDrawingCalibrationButton();
+    updateDrawingMoveControls();
 }
 
 $('drawingActiveRecipe').onchange = guarded(async () => {
     const recipeId = $('drawingActiveRecipe').value;
     if (!recipeId) return;
-    const result = await cmd('drawing.select_recipe', {drawing_id: activeDrawing.id, recipe_id: recipeId}, true);
-    activeDrawing = result.drawing;
-    selectedDrawingPointId = activeDrawing.points?.[0]?.id || null;
-    loadDrawingPoseInputs();
-    await loadRecipes(recipeId);
-    renderDrawingPanel();
+    $('drawingActiveRecipe').disabled = true;
+    try
+    {
+        await activateDrawingRecipe(recipeId);
+        loadDrawingPoseInputs();
+        await loadRecipes(recipeId);
+    }
+    finally
+    {
+        renderDrawingPanel();
+    }
 });
 
 $('newDrawingRecipe').onclick = guarded(async () => {
+    await ensureDrawingWorkflow();
     const name = prompt('이 그룹에서 사용할 새 레시피 이름');
     if (!name?.trim()) return;
     const created = await cmd('recipe.upsert', {name: name.trim()}, true);
-    const result = await cmd('drawing.select_recipe', {drawing_id: activeDrawing.id, recipe_id: created.recipe.id}, true);
-    activeDrawing = result.drawing;
+    await activateDrawingRecipe(created.recipe.id);
     await loadRecipes(created.recipe.id);
     loadDrawingPoseInputs();
     renderDrawingPanel();
@@ -5604,7 +5665,8 @@ function updateDrawingMoveControls()
     {
         xyMode.checked = false;
     }
-    move.disabled = !selectedDrawingPoint() || Boolean(activeDrawing?.point_sets?.length && !activeDrawing.selected_recipe_id);
+    move.disabled = !selectedDrawingPoint() || Boolean(drawingWorkflowError() ||
+        (activeDrawing?.point_sets?.length && !activeDrawing.selected_recipe_id));
 }
 
 
@@ -5653,7 +5715,7 @@ function updateDrawingCalibrationButton()
     }
     const point = selectedDrawingPoint();
     button.disabled = !point || Boolean(
-        (activeDrawing?.point_sets?.length && !activeDrawing.selected_recipe_id) ||
+        drawingWorkflowError() || (activeDrawing?.point_sets?.length && !activeDrawing.selected_recipe_id) ||
         activeDrawing?.product_rotation_deg || activeDrawing?.product_tilt_deg);
     button.textContent = point?.calibration
         ? '캘리브레이션 포인트 해제'
@@ -5749,6 +5811,7 @@ function openDrawingRecipeDialog(mode)
 
 async function confirmDrawingRecipe()
 {
+    await ensureDrawingWorkflow();
     let recipeId = $('drawingRecipeSelect').value;
     const newName = $('drawingNewRecipeName').value.trim();
     if (drawingRecipeMode === 'export' && newName)
@@ -5768,7 +5831,7 @@ async function confirmDrawingRecipe()
             recipe_id: recipeId
         });
         await loadRecipes(result.recipe.id);
-        activeDrawing = (await cmd('drawing.select_recipe', {drawing_id: activeDrawing.id, recipe_id: result.recipe.id}, true)).drawing;
+        await activateDrawingRecipe(result.recipe.id);
     }
     else
     {
@@ -6446,6 +6509,8 @@ async function loadCommands()
                 true
             )
         ).commands;
+
+    renderDrawingRecipeSelector();
 
 
     const groups =
