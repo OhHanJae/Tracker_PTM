@@ -100,6 +100,7 @@ class DrawingStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.manifest_path = self.root / "drawings.json"
         self._drawings: list[dict[str, Any]] = []
+        self._deleted_packages: set[str] = set()
         self.recipe_store = recipe_store
         self.load()
 
@@ -114,13 +115,26 @@ class DrawingStore:
             else:
                 drawings = data.get("drawings", []) if isinstance(data, dict) else []
                 self._drawings = [item for item in drawings if isinstance(item, dict)]
+                deleted = data.get("deleted_packages", []) if isinstance(data, dict) else []
+                self._deleted_packages = {str(name) for name in deleted} if isinstance(deleted, list) else set()
         self._sync_cad_packages()
+        next_order = max((int(item.get("order") or 0) for item in self._drawings), default=0)
+        for record in sorted(self._drawings, key=lambda item: str(item.get("updated", "")), reverse=True):
+            if not record.get("order"):
+                next_order += 1
+                record["order"] = next_order
 
     def save(self) -> None:
+        next_order = max((int(item.get("order") or 0) for item in self._drawings), default=0)
+        for record in self._drawings:
+            if not record.get("order"):
+                next_order += 1
+                record["order"] = next_order
         payload = {
             "version": 1,
             "updated": now_iso(),
             "drawings": self._drawings,
+            "deleted_packages": sorted(self._deleted_packages),
         }
         temporary = self.manifest_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -145,8 +159,7 @@ class DrawingStore:
             self._public_record(record, include_points=False)
             for record in sorted(
                 self._drawings,
-                key=lambda item: str(item.get("updated", "")),
-                reverse=True,
+                key=lambda item: int(item.get("order") or 2**31),
             )
         ]
 
@@ -290,12 +303,38 @@ class DrawingStore:
     def delete_drawing(self, drawing_id: str) -> None:
         record = self._record(drawing_id)
         if record.get("source_kind") == "cad_package":
-            raise ValueError("기본 제공 CAD 패키지는 삭제할 수 없습니다.")
+            self._deleted_packages.add(str(record["package_name"]))
         drawing_dir = self.root / drawing_id
         self._drawings.remove(record)
-        self.save()
+        try:
+            self.save()
+        except OSError:
+            self._drawings.append(record)
+            if record.get("source_kind") == "cad_package":
+                self._deleted_packages.discard(str(record["package_name"]))
+            raise
         if drawing_dir.is_dir():
             shutil.rmtree(drawing_dir)
+
+    @_drawing_edit
+    def update_drawing(self, drawing_id: str, name: str) -> dict[str, Any]:
+        name = name.strip()
+        if not name or len(name) > 200:
+            raise ValueError("도면 이름은 1~200자로 입력하세요.")
+        record = self._record(drawing_id)
+        record["name"] = name
+        record["updated"] = now_iso()
+        self.save()
+        return self.get_drawing(drawing_id)
+
+    @_drawing_edit
+    def reorder_drawings(self, ordered_ids: list[str]) -> list[dict[str, Any]]:
+        if len(ordered_ids) != len(self._drawings) or set(ordered_ids) != {item["id"] for item in self._drawings}:
+            raise ValueError("모든 도면 ID를 중복 없이 지정하세요.")
+        for order, drawing_id in enumerate(ordered_ids, 1):
+            self._record(drawing_id)["order"] = order
+        self.save()
+        return self.list_drawings()
 
     def _create_cad_package_from_uploads(
         self, files: list[tuple[str, bytes]]
@@ -656,6 +695,8 @@ class DrawingStore:
         if calibration is not None and not isinstance(calibration, dict):
             raise ValueError("invalid backup calibration")
         record["calibration"] = calibration
+        if isinstance(state.get("name"), str) and 0 < len(state["name"].strip()) <= 200:
+            record["name"] = state["name"].strip()
         if state.get("recipe_document") is not None:
             if self.recipe_store is None:
                 raise ValueError("레시피 저장소가 필요합니다.")
@@ -1413,7 +1454,8 @@ class DrawingStore:
             "product_rotation_deg": float(context.get("product_rotation_deg", 0.0) or 0.0),
             "product_tilt_deg": float(context.get("product_tilt_deg", 0.0) or 0.0),
             "point_count": len(record.get("points") or []),
-            "deletable": record.get("source_kind") != "cad_package",
+            "deletable": True,
+            "order": int(record.get("order") or 0),
         }
         if record.get("source_kind") in CAD_PACKAGE_KINDS:
             result.update(
@@ -1473,6 +1515,8 @@ class DrawingStore:
                 continue
             manifest = _json_object(manifest_path)
             package_name = package_dir.name
+            if package_name in self._deleted_packages:
+                continue
             old = previous.get(package_name, {})
             points_by_file: dict[str, list[dict[str, Any]]] = {}
             point_sets: list[dict[str, Any]] = []
@@ -1524,7 +1568,8 @@ class DrawingStore:
                     "id": str(old.get("id") or f"cad-{_safe_package_id(package_name)}"),
                     "source_kind": "cad_package",
                     "package_name": package_name,
-                    "name": package_name,
+                    "name": str(old.get("name") or package_name),
+                    "order": int(old.get("order") or 0),
                     "source_filename": "product.glb",
                     "model_path": str(model_path.resolve()),
                     "manifest_path": str(manifest_path.resolve()),

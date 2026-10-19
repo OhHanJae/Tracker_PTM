@@ -154,6 +154,7 @@
                 </section>
                 <aside class="drawing-calibration-panel">
                     <h2>도면 포인트 설정</h2>
+                    <label><input id="drawingPointLabels" type="checkbox">포인트 ID 보이기</label>
                     <div id="drawingPointSets" class="cad-groups"></div>
                     <div class="toolbar"><label>그룹 레시피<select id="drawingActiveRecipe" aria-label="그룹 레시피"></select></label><button id="newDrawingRecipe" type="button">새 레시피</button></div>
                     <p id="drawingWorkflowStatus" role="status"></p>
@@ -238,6 +239,11 @@
             <div class="toolbar">
                 <button data-command="laser.on">ON</button><button data-command="laser.off">OFF</button>
             </div>
+            <h3>상태별 레이저 조사</h3>
+            <p>이동 완료·Vision 위치 판정·작업 완료에 따라 자동 전환됩니다. 점멸 간격은 점등과 소등을 전환하는 시간입니다.</p>
+            <output id="laserWorkflowStatus">상태 설정을 불러오는 중</output>
+            <div class="table-scroll"><table><thead><tr><th>상태</th><th>조사 방식</th><th>점멸 전환 간격 (ms)</th><th>웹 시험</th></tr></thead><tbody id="laserStateProfiles"></tbody></table></div>
+            <p>방식과 간격을 바꾼 후 ‘레이저 설정 저장’을 누르세요. 시험은 선택한 상태를 최대 30분 적용하며 OFF·정지·다음 이동으로 종료합니다.</p>
         </section>
         <section id="protocol" class="page" hidden>
             <h2>프로토콜 / API</h2>

@@ -906,11 +906,71 @@ $('savePortSettings').onclick =
     guarded(savePortSettings);
 
 let laserSettingsDirty = false;
-$('laserBypass').oninput = () => { laserSettingsDirty = true; };
-$('saveLaserSettings').onclick = guarded(async () => {
-    await cmd('laser.settings', {bypass: $('laserBypass').checked});
+let laserProfilesKey = '';
+const laserStateNames = {
+    point_irradiation: '1. 포인트 조사',
+    position_check: '2. 체결점 위치 확인',
+    wrong_point: '3. 잘못된 체결점',
+    work_complete: '4. 작업 완료'
+};
+function renderLaserStateProfiles(laser)
+{
+    $('laserWorkflowStatus').textContent = `현재 상태: ${laserStateNames[laser.active_state] || '소등/대기'}`;
+    if (!laser.state_profiles)
+    {
+        $('laserStateProfiles').textContent = '상태별 조사 기능을 사용하려면 PTM 서버를 최신 버전으로 재시작하세요.';
+        return;
+    }
+    const key = JSON.stringify(laser.state_profiles);
+    if (laserSettingsDirty || key === laserProfilesKey) return;
+    laserProfilesKey = key;
+    $('laserStateProfiles').replaceChildren(...Object.entries(laserStateNames).map(([state, name]) => {
+        const row = document.createElement('tr');
+        row.dataset.state = state;
+        const select = document.createElement('select');
+        select.setAttribute('aria-label', `${name} 조사 방식`);
+        select.replaceChildren(new Option('점등', 'on'), new Option('점멸', 'blink'), new Option('소등', 'off'));
+        select.value = laser.state_profiles[state].mode;
+        const interval = document.createElement('input');
+        interval.type = 'number';
+        interval.min = '100'; interval.max = '60000'; interval.step = '10';
+        interval.setAttribute('aria-label', `${name} 점멸 간격`);
+        interval.value = laser.state_profiles[state].interval_ms;
+        interval.disabled = select.value !== 'blink';
+        select.oninput = () => {laserSettingsDirty = true; interval.disabled = select.value !== 'blink';};
+        interval.oninput = () => {laserSettingsDirty = true;};
+        const trial = document.createElement('button');
+        trial.type = 'button'; trial.textContent = '시험';
+        trial.onclick = guarded(async () => {
+            await saveLaserSettings();
+            await cmd('laser.state', {state, manual: true});
+        });
+        for (const element of [name, select, interval, trial])
+        {
+            const cell = document.createElement('td');
+            if (typeof element === 'string') cell.textContent = element;
+            else cell.append(element);
+            row.append(cell);
+        }
+        return row;
+    }));
+}
+
+async function saveLaserSettings()
+{
+    const profiles = {};
+    for (const row of $('laserStateProfiles').querySelectorAll('tr[data-state]'))
+    {
+        const interval = Number(row.querySelector('input').value);
+        if (!Number.isInteger(interval) || interval < 100 || interval > 60000) throw Error('점멸 간격은 100~60000 ms 정수로 입력하세요.');
+        profiles[row.dataset.state] = {mode: row.querySelector('select').value, interval_ms: interval};
+    }
+    await cmd('laser.settings', {bypass: $('laserBypass').checked,
+        ...(Object.keys(profiles).length ? {state_profiles: profiles} : {})});
     laserSettingsDirty = false;
-});
+}
+$('laserBypass').oninput = () => { laserSettingsDirty = true; };
+$('saveLaserSettings').onclick = guarded(saveLaserSettings);
 
 let ptmSettingsDirty = false;
 
@@ -1359,6 +1419,7 @@ async function refreshOnce()
 
                 if ($('laserState'))
                 {
+                    renderLaserStateProfiles(status.laser);
                     if (!laserSettingsDirty)
                     {
                         $('laserBypass').checked = Boolean(status.laser.bypass);
@@ -3144,12 +3205,27 @@ function renderDrawingManager()
     {
         return;
     }
-    root.replaceChildren(...drawings.map(drawing => {
+    root.replaceChildren(...drawings.map((drawing, index) => {
         const row = document.createElement('article');
         row.className = 'drawing-manager-item';
         const info = document.createElement('div');
-        const title = document.createElement('strong');
-        title.textContent = drawing.name;
+        const title = document.createElement('input');
+        title.value = drawing.name;
+        title.maxLength = 200;
+        title.setAttribute('aria-label', `${index + 1}번 도면 이름`);
+        const rename = document.createElement('button');
+        rename.type = 'button';
+        rename.textContent = '이름 저장';
+        rename.onclick = guarded(async () => {
+            const result = await cmd('drawing.update', {drawing_id: drawing.id, name: title.value}, true);
+            if (activeDrawing?.id === drawing.id)
+            {
+                activeDrawing = result.drawing;
+                renderDrawingPanel();
+            }
+            await loadDrawings();
+            renderDrawingManager();
+        });
         const files = document.createElement('p');
         files.textContent = [drawing.source_filename, ...(drawing.attachment_filenames || [])]
             .filter(Boolean)
@@ -3157,8 +3233,7 @@ function renderDrawingManager()
         info.append(title, files);
         const action = document.createElement('button');
         action.type = 'button';
-        action.textContent = drawing.deletable ? '삭제' : '기본 제공';
-        action.disabled = !drawing.deletable;
+        action.textContent = '삭제';
         action.onclick = guarded(async () => {
             if (!confirm(`${drawing.name} 도면과 포인트 파일을 삭제할까요?`))
             {
@@ -3187,7 +3262,25 @@ function renderDrawingManager()
             link.click();
             setTimeout(() => URL.revokeObjectURL(url), 1000);
         });
-        row.append(info, download, action);
+        const actions = document.createElement('div');
+        actions.className = 'toolbar';
+        for (const [label, delta] of [['위로', -1], ['아래로', 1]])
+        {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = label;
+            button.disabled = index + delta < 0 || index + delta >= drawings.length;
+            button.onclick = guarded(async () => {
+                const ids = drawings.map(item => item.id);
+                [ids[index], ids[index + delta]] = [ids[index + delta], ids[index]];
+                await cmd('drawing.reorder', {ordered_ids: ids}, true);
+                await loadDrawings();
+                renderDrawingManager();
+            });
+            actions.append(button);
+        }
+        actions.append(rename, download, action);
+        row.append(info, actions);
         return row;
     }));
 }

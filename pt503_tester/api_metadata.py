@@ -172,6 +172,8 @@ COMMAND_TEMPLATES: dict[str, dict[str, Any]] = {
     "drawing.list": {},
     "drawing.get": {"drawing_id": ""},
     "drawing.delete": {"drawing_id": "", "confirm": True},
+    "drawing.update": {"drawing_id": "", "name": "도면 이름"},
+    "drawing.reorder": {"ordered_ids": []},
     "drawing.select_point_set": {"drawing_id": "", "point_file": ""},
     "drawing.select_recipe": {"drawing_id": "", "recipe_id": ""},
     "drawing.point_upsert": {
@@ -256,6 +258,8 @@ COMMAND_TEMPLATES: dict[str, dict[str, Any]] = {
     "laser.on": {},
     "laser.off": {},
     "laser.pulse": {"duration_ms": 500},
+    "laser.state": {"state": "point_irradiation", "manual": False},
+    "laser.settings": {"bypass": False},
     "device.query": {"type": "pan"},
     "maintenance.self_check": {"confirm": True},
     "maintenance.restart": {"confirm": True},

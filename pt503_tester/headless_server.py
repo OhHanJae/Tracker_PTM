@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+from copy import deepcopy
 from datetime import datetime
 import errno
 import json
@@ -119,6 +120,7 @@ LASER_DEFAULT_ADDRESS = 0x01
 LASER_COIL_ADDRESS = 0x0000
 LASER_RESPONSE_TIMEOUT_S = 0.35
 LASER_API_COMMANDS = {
+    'laser.state',
     'power_save.wake',
     'power_save.settings',
     'laser.power_save',
@@ -132,6 +134,8 @@ DRAWING_API_COMMANDS = {
     'drawing.list',
     'drawing.get',
     'drawing.delete',
+    'drawing.update',
+    'drawing.reorder',
     'drawing.select_point_set',
     'drawing.select_recipe',
     'drawing.point_upsert',
@@ -177,6 +181,16 @@ class HeadlessController:
         self._gpio_laser = GpioLaser()
         self._laser_error = ""
         self._laser_generation = 0
+        self._laser_state_allowed = True
+        self._laser_active_state: str | None = None
+        self._laser_active_profile: dict[str, Any] = {}
+        self._laser_blink_next = 0.0
+        self.laser_state_profiles = {
+            "point_irradiation": {"mode": "on", "interval_ms": 500},
+            "position_check": {"mode": "on", "interval_ms": 500},
+            "wrong_point": {"mode": "blink", "interval_ms": 250},
+            "work_complete": {"mode": "off", "interval_ms": 500},
+        }
         self._power_saving = False
         self._laser_manual_deadline = 0.0
         self._laser_manual_allowed = True
@@ -324,7 +338,7 @@ class HeadlessController:
                         and not self.laser_bypass
                         and pending.get("laser_generation") == self._laser_generation):
                     try:
-                        self._laser_write_coil(True)
+                        self._apply_laser_state("point_irradiation")
                     except HeadlessApiError as exc:
                         self._laser_deadline = time.monotonic() + 0.2
                         self._failed_motion_id = pending.get("motion_id")
@@ -357,6 +371,11 @@ class HeadlessController:
             self._laser_backend = laser_settings["backend"]
         if isinstance(laser_settings, dict) and isinstance(laser_settings.get("bypass"), bool):
             self.laser_bypass = laser_settings["bypass"]
+        if isinstance(laser_settings, dict) and "state_profiles" in laser_settings:
+            try:
+                self.laser_state_profiles = self._validated_laser_profiles(laser_settings["state_profiles"])
+            except (ValueError, TypeError):
+                pass
         device_settings = payload.get("device") if isinstance(payload, dict) else None
         if isinstance(device_settings, dict):
             for key in self.device_settings:
@@ -413,6 +432,7 @@ class HeadlessController:
             "version": 1,
             "device": dict(self.device_settings),
             "laser": {"bypass": self.laser_bypass, "backend": self._laser_backend,
+                      "state_profiles": deepcopy(self.laser_state_profiles),
                       "numbering": "BOARD", "pin": 31, "active_high": True},
             "serial": {
                 "port": self._port,
@@ -506,14 +526,70 @@ class HeadlessController:
                         self._laser_deadline = time.monotonic() + 0.2
                     else:
                         self._laser_deadline = 0.0
+
                 if self._laser_deadline and time.monotonic() >= self._laser_deadline:
                     try:
                         self._laser_write_coil(False)
                     except HeadlessApiError:
-                        # Retry OFF; an unacknowledged command does not prove OFF.
                         self._laser_deadline = time.monotonic() + 0.2
                     else:
                         self._laser_deadline = 0.0
+                if self._laser_blink_next and time.monotonic() >= self._laser_blink_next:
+                    try:
+                        self._laser_write_coil(not self.laser_on, pattern_step=True)
+                    except HeadlessApiError:
+                        self._laser_active_state = None
+                        self._laser_blink_next = 0.0
+                        self._laser_deadline = time.monotonic() + 0.2
+                    else:
+                        self._laser_blink_next = time.monotonic() + self._laser_active_profile["interval_ms"] / 1000
+
+    def _validated_laser_profiles(self, profiles: Any) -> dict[str, dict[str, Any]]:
+        if not isinstance(profiles, dict) or set(profiles) != set(self.laser_state_profiles):
+            raise ValueError("레이저 상태 설정에는 4개 상태가 모두 필요합니다.")
+        result = {}
+        for state, profile in profiles.items():
+            if not isinstance(profile, dict) or profile.get("mode") not in {"on", "blink", "off"}:
+                raise ValueError(f"잘못된 레이저 조사 방식: {state}")
+            interval = profile.get("interval_ms", 500)
+            if type(interval) is not int or not 100 <= interval <= 60000:
+                raise ValueError("점멸 전환 간격은 100~60000 ms 정수로 입력하세요.")
+            result[state] = {"mode": profile["mode"], "interval_ms": interval}
+        return result
+
+    def _apply_laser_state(self, state: str, *, manual: bool = False) -> dict[str, Any]:
+        if state not in self.laser_state_profiles:
+            raise HeadlessApiError("INVALID_PARAMS", "unknown laser state")
+        profile = deepcopy(self.laser_state_profiles[state])
+        if profile["mode"] != "off":
+            if self._pending_motion is not None:
+                raise HeadlessApiError("MOTION_ACTIVE", "Laser remains OFF until movement completes")
+            allowed = self._laser_manual_allowed if manual else self._laser_state_allowed
+            if not allowed or (not manual and self._laser_automatic_off and state != "work_complete"):
+                raise HeadlessApiError("LASER_INTERLOCK", "Core safety interlock blocks laser state")
+        if not manual and self._laser_manual_deadline:
+            return {"accepted": False, "manual_override": True}
+        if self._laser_active_state == state and self._laser_active_profile == profile and manual == bool(self._laser_manual_deadline):
+            if manual:
+                self._laser_manual_deadline = time.monotonic() + 1800
+            return {"accepted": True, "state": state, **profile, "laser_on": self.laser_on}
+        self._laser_write_coil(False)
+        self._laser_active_state = state
+        self._laser_active_profile = profile
+        if manual and profile["mode"] != "off":
+            self._laser_manual_deadline = time.monotonic() + 1800
+        try:
+            if profile["mode"] != "off":
+                self._laser_write_coil(True, pattern_step=True)
+            if profile["mode"] == "blink":
+                self._laser_blink_next = time.monotonic() + profile["interval_ms"] / 1000
+        except HeadlessApiError:
+            self._laser_active_state = None
+            self._laser_blink_next = 0.0
+            self._laser_manual_deadline = 0.0
+            self._laser_deadline = time.monotonic() + 0.2
+            raise
+        return {"accepted": True, "state": state, **profile, "laser_on": self.laser_on}
 
     def _service_loop(self) -> None:
         next_poll = 0.0
@@ -735,6 +811,8 @@ class HeadlessController:
     def close_laser(self) -> None:
         """Turn the laser OFF if possible, then close only the Arduino RS485 port."""
         with self._laser_lock:
+            self._laser_active_state = None
+            self._laser_blink_next = 0.0
             self._laser_manual_deadline = 0.0
             self._laser_generation += 1
             if self._laser_backend == "gpio":
@@ -803,15 +881,19 @@ class HeadlessController:
             )
         return response
 
-    def _laser_write_coil(self, enabled: bool) -> dict[str, Any]:
+    def _laser_write_coil(self, enabled: bool, *, pattern_step: bool = False) -> dict[str, Any]:
         """Write the owned GPIO output, or the explicitly configured legacy relay."""
-        if enabled and not self._laser_manual_allowed:
+        state_permitted = pattern_step and self._laser_state_allowed and (
+            not self._laser_automatic_off or self._laser_active_state == "work_complete")
+        if enabled and not self._laser_manual_allowed and not state_permitted:
             raise HeadlessApiError("LASER_INTERLOCK", "Core safety interlock blocks laser output")
         if enabled and self.laser_bypass:
             raise HeadlessApiError("LASER_BYPASSED", "Laser output is disabled by bypass mode")
         if enabled and self._power_saving and not self._laser_manual_deadline:
             raise HeadlessApiError("POWER_SAVING", "Wake Core before enabling laser output")
-        if not enabled:
+        if not enabled and not pattern_step:
+            self._laser_active_state = None
+            self._laser_blink_next = 0.0
             if self._laser_manual_deadline:
                 self._laser_manual_deadline = 0.0
             self._laser_generation += 1
@@ -970,6 +1052,10 @@ class HeadlessController:
                     "health_misses": self._health_misses,
                 },
                 "laser": {
+                    "state_profiles": deepcopy(self.laser_state_profiles),
+                    "active_state": self._laser_active_state,
+                    "active_profile": dict(self._laser_active_profile) if self._laser_active_state else None,
+                    "state_allowed": self._laser_state_allowed,
                     "control_mode": "manual" if self._laser_manual_deadline else "auto",
                     "manual_override": bool(self._laser_manual_deadline),
                     "manual_remaining_s": max(0.0, self._laser_manual_deadline - time.monotonic()) if self._laser_manual_deadline else 0.0,
@@ -1386,8 +1472,11 @@ class HeadlessController:
                 self._power_saving = enabled
                 self._laser_automatic_off = automatic_off
                 self._laser_manual_allowed = allowed
+                self._laser_state_allowed = self._bool(params, "state_allowed", allowed)
                 preserve_manual = bool(self._laser_manual_deadline and allowed)
-                if (enabled or automatic_off or not allowed) and not preserve_manual:
+                preserve_state = bool(self._laser_active_state and self._laser_state_allowed
+                                      and not enabled and (not automatic_off or self._laser_active_state == "work_complete"))
+                if (enabled or automatic_off or not allowed or not self._laser_state_allowed) and not (preserve_manual or preserve_state):
                     self._laser_generation += 1
                     try:
                         self._laser_write_coil(False)
@@ -1508,12 +1597,13 @@ class HeadlessController:
                                     "pelco.", "lens.", "aux.", "camera.", "maintenance.", "zero."))
                     or command in {"point.goto", "serial.connect", "serial.disconnect", "raw.send"}
                     or command in set(protocol_named_command_names()) - {"magnification.query", "device.query_diagnostics"}):
-                preserve_manual = (command == "motion.stop" and params.get("preserve_laser_manual") is True)
+                preserve_manual = (command == "motion.stop" and params.get("preserve_laser_manual") is True
+                                   and bool(self._laser_manual_deadline))
                 preserve_manual |= (command == "motion.stop" and "jog_token" in params
                                     and (self._active_jog is None or params["jog_token"] != self._jog_token))
                 preserve_manual |= command in {"motion.completion_config", "motion.tolerance"} and not params
                 with self._laser_lock:
-                    if self._laser_manual_deadline and not preserve_manual:
+                    if (self._laser_manual_deadline or self._laser_active_state) and not preserve_manual:
                         try:
                             self._laser_write_coil(False)
                         except HeadlessApiError as exc:
@@ -1752,6 +1842,8 @@ class HeadlessController:
                 self.motion_state = "stopped"
             if command in {"laser.off", "laser.on"}:
                 with self._laser_lock:
+                    self._laser_active_state = None
+                    self._laser_blink_next = 0.0
                     try:
                         result = self._command_impl(command, params)
                     except HeadlessApiError:
@@ -1765,6 +1857,8 @@ class HeadlessController:
                     raise HeadlessApiError("MOTION_ACTIVE", "Laser remains OFF until movement completes")
                 duration = self._int(params, "duration_ms", 500, minimum=50, maximum=60000)
                 with self._laser_lock:
+                    self._laser_active_state = None
+                    self._laser_blink_next = 0.0
                     self._laser_deadline = time.monotonic() + duration / 1000
                     self._laser_manual_deadline = self._laser_deadline
                     try:
@@ -1774,6 +1868,19 @@ class HeadlessController:
                         self._laser_deadline = time.monotonic() + 0.2
                         raise
                 return {**result, "duration_ms": duration}
+            if command == "laser.state":
+                with self._laser_lock:
+                    if params.get("recipe_id") is not None:
+                        recipe_id = self.recipe_store.get_recipe(str(params["recipe_id"])).id
+                        point = self.recipe_store.get_point(recipe_id, str(params["point_id"]))
+                        selected = self.recipe_store.get_point(recipe_id, str(self._selected_point_id or ""))
+                        if recipe_id != self._selected_recipe_id or point.id != selected.id:
+                            raise HeadlessApiError("STALE_TARGET", "laser state does not match selected target")
+                    try:
+                        return self._apply_laser_state(str(params["state"]), manual=self._bool(params, "manual", False))
+                    except HeadlessApiError:
+                        self._laser_deadline = time.monotonic() + 0.2
+                        raise
             if command == "motion.completion_config" and "tolerance_deg" in params:
                 self._float(params, "tolerance_deg", minimum=0.01, maximum=10)
             if command == "point.upsert":
@@ -1846,7 +1953,8 @@ class HeadlessController:
         if command == "system.ping":
             return {"protocol": PROTOCOL_NAME, "version": PROTOCOL_VERSION, "time": time.time()}
         if command == "laser.settings":
-            enabled = self._bool(params, "bypass")
+            enabled = self._bool(params, "bypass", self.laser_bypass)
+            profiles = self._validated_laser_profiles(params["state_profiles"]) if "state_profiles" in params else self.laser_state_profiles
             with self._laser_lock:
                 if enabled:
                     self._laser_manual_deadline = 0.0
@@ -1859,13 +1967,19 @@ class HeadlessController:
                     self.laser_on = False
                     self._laser_deadline = 0.0
                 previous = self.laser_bypass
+                previous_profiles = self.laser_state_profiles
                 self.laser_bypass = enabled
+                self.laser_state_profiles = profiles
                 try:
                     self._save_settings()
                 except OSError:
                     self.laser_bypass = previous
+                    self.laser_state_profiles = previous_profiles
                     raise
-                return {"bypass": self.laser_bypass, "laser_on": self.laser_on}
+                if profiles != previous_profiles and self._laser_active_state:
+                    self._laser_write_coil(False)
+                return {"bypass": self.laser_bypass, "laser_on": self.laser_on,
+                        "state_profiles": deepcopy(self.laser_state_profiles)}
         if command == "system.status":
             return self.status()
         if command == "system.commands":
@@ -1908,6 +2022,10 @@ class HeadlessController:
             drawing_id = str(params["drawing_id"])
             self.drawing_store.delete_drawing(drawing_id)
             return {"accepted": True, "drawing_id": drawing_id}
+        if command == "drawing.update":
+            return {"drawing": self.drawing_store.update_drawing(str(params["drawing_id"]), str(params["name"]))}
+        if command == "drawing.reorder":
+            return {"drawings": self.drawing_store.reorder_drawings([str(item) for item in params["ordered_ids"]])}
         if command == "drawing.select_point_set":
             return {
                 "drawing": self.drawing_store.select_point_set(

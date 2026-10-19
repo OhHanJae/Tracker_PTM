@@ -334,6 +334,10 @@ output { padding: 8px 0; }
 .drawing-manager-list { display: grid; gap: 8px; }
 .drawing-manager-item { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; }
 .drawing-manager-item p { margin: 4px 0 0; overflow-wrap: anywhere; }
+.drawing-manager-item { flex-wrap: wrap; }
+.drawing-manager-item > div:first-child { flex: 1 1 280px; min-width: 0; }
+.drawing-manager-item input { width: 100%; }
+.drawing-manager-item > .toolbar { flex: 0 1 auto; margin: 0; }
 dialog { border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 18px 60px #0b17284d; }
 dialog::backdrop { background: #0b172899; }
 [hidden] { display: none !important; }
