@@ -42,6 +42,7 @@ class RecipePoint:
     order: int = 1
     enabled: bool = True
     note: str = ""
+    drawing_point_id: str = ""
     updated: str = field(default_factory=now_iso)
 
     @classmethod
@@ -82,6 +83,7 @@ class RecipePoint:
             order=int(data.get("order", default_order)),
             enabled=bool(data.get("enabled", True)),
             note=str(data.get("note", "")),
+            drawing_point_id=str(data.get("drawing_point_id") or ""),
             updated=str(data.get("updated") or now_iso()),
         )
 
@@ -97,6 +99,7 @@ class RecipePoint:
             "order": int(self.order),
             "enabled": bool(self.enabled),
             "note": self.note,
+            "drawing_point_id": self.drawing_point_id,
             "updated": self.updated,
         }
 
@@ -111,6 +114,7 @@ class Recipe:
     product_tilt_deg: float = 0.0
     source_recipe_id: str = ""
     pose_applied: bool = False
+    drawing: dict[str, Any] = field(default_factory=dict)
     points: list[RecipePoint] = field(default_factory=list)
     updated: str = field(default_factory=now_iso)
 
@@ -135,6 +139,7 @@ class Recipe:
             product_tilt_deg=float(data.get("product_tilt_deg", 0.0)),
             source_recipe_id=str(data.get("source_recipe_id") or ""),
             pose_applied=bool(data.get("pose_applied", False)),
+            drawing=deepcopy(data.get("drawing") or {}),
             points=points,
             updated=str(data.get("updated") or now_iso()),
         )
@@ -157,6 +162,7 @@ class Recipe:
             "product_tilt_deg": self.product_tilt_deg,
             "source_recipe_id": self.source_recipe_id,
             "pose_applied": self.pose_applied,
+            "drawing": deepcopy(self.drawing),
             "updated": self.updated,
             "points": [point.to_dict() for point in self.points],
         }
@@ -411,6 +417,12 @@ class RecipeStore:
         previous = deepcopy(self._recipes)
         if point_id:
             point = self.get_point(recipe_id, point_id)
+            drawing_point = next((item for item in recipe.drawing.get("points", [])
+                                  if item["id"] == point.drawing_point_id), None)
+            changed_angles = point.pan != float(pan) % 360 or point.tilt != float(tilt)
+            if drawing_point is not None and changed_angles and drawing_point.get("calibration") and (
+                    recipe.drawing.get("product_rotation_deg") or recipe.drawing.get("product_tilt_deg")):
+                raise ValueError("기준점 재티칭은 제품 0°/0°에서 수행하세요.")
             point.name = name
             point.pan = float(pan) % 360.0
             point.tilt = max(-60.0, min(60.0, float(tilt)))
@@ -420,6 +432,14 @@ class RecipeStore:
             point.note = note
             point.enabled = enabled
             point.updated = now_iso()
+            if drawing_point is not None:
+                drawing_point["enabled"] = bool(enabled)
+                if changed_angles:
+                    drawing_point.update(pan=point.pan, tilt=point.tilt)
+                    if drawing_point.get("calibration"):
+                        drawing_point.pop("calibration_pan", None)
+                        drawing_point.pop("calibration_tilt", None)
+                        recipe.drawing["calibration"] = None
         else:
             point = RecipePoint.create(
                 name,
@@ -502,6 +522,7 @@ class RecipeStore:
                 raise ValueError(f"recipe {recipe_index}.source_recipe_id must be a string")
             if "pose_applied" in data and not isinstance(data["pose_applied"], bool):
                 raise ValueError(f"recipe {recipe_index}.pose_applied must be boolean")
+            cls._validate_drawing(data.get("drawing", {}))
             points_data = data.get("points")
             if not isinstance(points_data, list):
                 raise ValueError(f"recipe {recipe_index}.points must be an array")
@@ -525,9 +546,44 @@ class RecipeStore:
                     raise ValueError(f"{where}.enabled must be boolean")
                 if not isinstance(point.get("note"), str):
                     raise ValueError(f"{where}.note must be a string")
+                if "drawing_point_id" in point and not isinstance(point["drawing_point_id"], str):
+                    raise ValueError(f"{where}.drawing_point_id must be a string")
             recipes.append(Recipe.from_dict(data))
         cls._validate_unique_ids(recipes)
         return recipes
+
+    @classmethod
+    def _validate_drawing(cls, drawing: Any) -> None:
+        if not isinstance(drawing, dict):
+            raise ValueError("recipe drawing must be an object")
+        if not drawing:
+            return
+        for key in ("drawing_id", "product_id", "point_file"):
+            cls._required_string(drawing, key, "recipe drawing")
+        if not isinstance(drawing.get("points"), list):
+            raise ValueError("recipe drawing points must be an array")
+        seen: set[str] = set()
+        for point in drawing["points"]:
+            if not isinstance(point, dict):
+                raise ValueError("invalid recipe drawing point")
+            point_id = cls._required_string(point, "id", "drawing point")
+            if point_id in seen:
+                raise ValueError("duplicate recipe drawing point")
+            seen.add(point_id)
+            for key in ("x", "y", "z"):
+                cls._finite_number(point, key, "drawing point", minimum=-math.inf, maximum=math.inf)
+            for key in ("pan", "calibration_pan"):
+                if point.get(key) is not None:
+                    cls._finite_number(point, key, "drawing point", minimum=0, maximum=359.99)
+            for key in ("tilt", "calibration_tilt"):
+                if point.get(key) is not None:
+                    cls._finite_number(point, key, "drawing point", minimum=-60, maximum=60)
+            if not isinstance(point.get("calibration", False), bool):
+                raise ValueError("drawing point calibration must be boolean")
+        for key in ("product_rotation_deg", "product_tilt_deg"):
+            cls._finite_number(drawing, key, "recipe drawing", minimum=-360, maximum=360)
+        if drawing.get("calibration") is not None and not isinstance(drawing["calibration"], dict):
+            raise ValueError("invalid recipe drawing calibration")
 
     @staticmethod
     def _validate_unique_ids(recipes: list[Recipe]) -> None:

@@ -173,6 +173,7 @@ COMMAND_TEMPLATES: dict[str, dict[str, Any]] = {
     "drawing.get": {"drawing_id": ""},
     "drawing.delete": {"drawing_id": "", "confirm": True},
     "drawing.select_point_set": {"drawing_id": "", "point_file": ""},
+    "drawing.select_recipe": {"drawing_id": "", "recipe_id": ""},
     "drawing.point_upsert": {
         "drawing_id": "",
         "point_id": "",

@@ -473,6 +473,12 @@ async function cmd(
     quiet = false
 )
 {
+    if (['drawing.point_upsert', 'drawing.calibrate', 'drawing.reset_calibration',
+         'drawing.estimate_pan_tilt', 'drawing.estimate_xy'].includes(command) &&
+        params.drawing_id === activeDrawing?.id && activeDrawing?.selected_recipe_id)
+    {
+        params = {recipe_id: activeDrawing.selected_recipe_id, ...params};
+    }
     try
     {
         const result =
@@ -3090,6 +3096,8 @@ async function uploadDrawingFile()
     const drawing =
         json.result.drawing;
 
+    await loadRecipes();
+
     setDrawingProgress(
         96,
         '목록 갱신',
@@ -3156,7 +3164,20 @@ function renderDrawingManager()
             await loadDrawings();
             renderDrawingManager();
         });
-        row.append(info, action);
+        const download = document.createElement('button');
+        download.type = 'button';
+        download.textContent = 'ZIP 내보내기';
+        download.onclick = guarded(async () => {
+            const response = await fetch(`/api/drawings/${encodeURIComponent(drawing.id)}/archive`);
+            if (!response.ok) throw Error('도면 ZIP 내보내기에 실패했습니다.');
+            const url = URL.createObjectURL(await response.blob());
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `${drawing.name.replace(/[\\/:*?"<>|]/g, '_')}_PTM.zip`;
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        });
+        row.append(info, download, action);
         return row;
     }));
 }
@@ -4869,11 +4890,64 @@ function renderDrawingPanel()
     renderDrawingInfo();
     renderDrawingPointSets();
     renderDrawingPoints();
+    renderDrawingRecipeSelector();
     renderPoints();
     window.dispatchEvent(new CustomEvent('drawing-cad-points', {
         detail: {drawing: activeDrawing}
     }));
 }
+
+function compatibleDrawingRecipes()
+{
+    return recipes.filter(recipe => !recipe.drawing?.point_file ||
+        (recipe.drawing.product_id === activeDrawing?.product_id &&
+         recipe.drawing.point_file === activeDrawing?.selected_point_file));
+}
+
+function renderDrawingRecipeSelector()
+{
+    const select = $('drawingActiveRecipe');
+    const placeholder = new Option('레시피를 선택하세요', '');
+    placeholder.disabled = true;
+    select.replaceChildren(placeholder,
+        ...compatibleDrawingRecipes().map(recipe => new Option(recipe.name, recipe.id)));
+    select.value = activeDrawing?.selected_recipe_id || '';
+    select.disabled = !activeDrawing;
+    $('newDrawingRecipe').disabled = !activeDrawing;
+    const disabled = Boolean(activeDrawing?.point_sets?.length && !activeDrawing.selected_recipe_id);
+    for (const id of ['applyCurrentDrawingPoint', 'toggleCalibrationPoint', 'calibrateDrawing',
+                      'resetDrawingCalibration', 'exportDrawingRecipe', 'moveDrawingPoint'])
+    {
+        $(id).disabled = !activeDrawing || disabled;
+    }
+    if (activeDrawing?.product_rotation_deg || activeDrawing?.product_tilt_deg)
+    {
+        $('applyCurrentDrawingPoint').disabled = true;
+        $('toggleCalibrationPoint').disabled = true;
+    }
+}
+
+$('drawingActiveRecipe').onchange = guarded(async () => {
+    const recipeId = $('drawingActiveRecipe').value;
+    if (!recipeId) return;
+    const result = await cmd('drawing.select_recipe', {drawing_id: activeDrawing.id, recipe_id: recipeId}, true);
+    activeDrawing = result.drawing;
+    selectedDrawingPointId = activeDrawing.points?.[0]?.id || null;
+    loadDrawingPoseInputs();
+    await loadRecipes(recipeId);
+    renderDrawingPanel();
+});
+
+$('newDrawingRecipe').onclick = guarded(async () => {
+    const name = prompt('이 그룹에서 사용할 새 레시피 이름');
+    if (!name?.trim()) return;
+    const created = await cmd('recipe.upsert', {name: name.trim()}, true);
+    const result = await cmd('drawing.select_recipe', {drawing_id: activeDrawing.id, recipe_id: created.recipe.id}, true);
+    activeDrawing = result.drawing;
+    await loadRecipes(created.recipe.id);
+    loadDrawingPoseInputs();
+    renderDrawingPanel();
+});
 
 
 function renderDrawingPointSets()
@@ -4906,6 +4980,7 @@ function renderDrawingPointSets()
                 }, true);
                 activeDrawing = result.drawing;
                 selectedDrawingPointId = activeDrawing.points?.[0]?.id || null;
+                loadDrawingPoseInputs();
             }
             finally
             {
@@ -4913,7 +4988,7 @@ function renderDrawingPointSets()
             }
         });
         const text = document.createElement('span');
-        text.textContent = `${pointSet.file} · ${pointSet.point_count}개` +
+        text.textContent = `${pointSet.name || pointSet.file} · ${pointSet.point_count}개` +
             (pointSet.requires_process_review ? ' · 검토 필요' : '');
         label.append(radio, text);
         root.append(label);
@@ -4994,6 +5069,9 @@ function renderDrawingPoints()
         tiltInput.step = '.01';
         tiltInput.placeholder = 'Tilt';
         tiltInput.value = point.tilt ?? '';
+        panInput.disabled = tiltInput.disabled = Boolean(
+            (activeDrawing?.point_sets?.length && !activeDrawing.selected_recipe_id) ||
+            activeDrawing?.product_rotation_deg || activeDrawing?.product_tilt_deg);
         const selectInputPoint = event => {
             event.stopPropagation();
             selectedDrawingPointId = point.id;
@@ -5447,7 +5525,9 @@ async function resetDrawingCalibration()
     {
         throw Error('먼저 도면을 선택하세요.');
     }
-    if (!confirm('이 도면의 모든 포인트 그룹에서 Pan/Tilt 값과 캘리브레이션 기준을 지울까요?'))
+    if (!confirm(activeDrawing.selected_recipe_id
+        ? '선택한 레시피의 Pan/Tilt 값과 캘리브레이션 기준을 지울까요?'
+        : '이 도면의 모든 포인트 그룹에서 Pan/Tilt 값과 캘리브레이션 기준을 지울까요?'))
     {
         return;
     }
@@ -5457,7 +5537,7 @@ async function resetDrawingCalibration()
     activeDrawing = result.drawing;
     loadDrawingPoseInputs();
     renderDrawingPanel();
-    $('notice').textContent = '도면의 Pan/Tilt 값, 기준 캘리브레이션, 제품 자세 값을 모두 초기화했습니다.';
+    $('notice').textContent = '선택한 보정의 Pan/Tilt, 기준점, 제품 자세를 초기화했습니다.';
 }
 
 
@@ -5482,6 +5562,7 @@ function selectedDrawingPoint()
 async function applyCurrentDrawingPoint()
 {
     const point = selectedDrawingPoint();
+    const drawing = activeDrawing;
     if (!point)
     {
         throw Error('도면 또는 목록에서 포인트를 선택하세요.');
@@ -5495,7 +5576,8 @@ async function applyCurrentDrawingPoint()
     }
     status.position = {pan, tilt};
     const result = await cmd('drawing.point_upsert', {
-        drawing_id: activeDrawing.id,
+        drawing_id: drawing.id,
+        recipe_id: drawing.selected_recipe_id,
         point_id: point.id,
         pan,
         tilt
@@ -5522,7 +5604,7 @@ function updateDrawingMoveControls()
     {
         xyMode.checked = false;
     }
-    move.disabled = !selectedDrawingPoint();
+    move.disabled = !selectedDrawingPoint() || Boolean(activeDrawing?.point_sets?.length && !activeDrawing.selected_recipe_id);
 }
 
 
@@ -5570,7 +5652,9 @@ function updateDrawingCalibrationButton()
         return;
     }
     const point = selectedDrawingPoint();
-    button.disabled = !point;
+    button.disabled = !point || Boolean(
+        (activeDrawing?.point_sets?.length && !activeDrawing.selected_recipe_id) ||
+        activeDrawing?.product_rotation_deg || activeDrawing?.product_tilt_deg);
     button.textContent = point?.calibration
         ? '캘리브레이션 포인트 해제'
         : '캘리브레이션 포인트로 선택';
@@ -5654,9 +5738,9 @@ function openDrawingRecipeDialog(mode)
     $('drawingRecipeDialogTitle').textContent =
         mode === 'export' ? '레시피로 저장' : '레시피에서 불러오기';
     $('drawingRecipeSelect').replaceChildren(
-        ...recipes.map(recipe => new Option(recipe.name, recipe.id))
+        ...compatibleDrawingRecipes().map(recipe => new Option(recipe.name, recipe.id))
     );
-    $('drawingRecipeSelect').value = selected()?.id || recipes[0]?.id || '';
+    $('drawingRecipeSelect').value = activeDrawing.selected_recipe_id || compatibleDrawingRecipes()[0]?.id || '';
     $('drawingNewRecipeLabel').hidden = mode !== 'export';
     $('drawingNewRecipeName').value = '';
     $('drawingRecipeDialog').showModal();
@@ -5684,6 +5768,7 @@ async function confirmDrawingRecipe()
             recipe_id: recipeId
         });
         await loadRecipes(result.recipe.id);
+        activeDrawing = (await cmd('drawing.select_recipe', {drawing_id: activeDrawing.id, recipe_id: result.recipe.id}, true)).drawing;
     }
     else
     {
@@ -5694,6 +5779,7 @@ async function confirmDrawingRecipe()
         activeDrawing = result.drawing;
     }
     $('drawingRecipeDialog').close();
+    loadDrawingPoseInputs();
     renderDrawingPanel();
 }
 

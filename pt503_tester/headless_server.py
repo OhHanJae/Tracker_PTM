@@ -133,6 +133,7 @@ DRAWING_API_COMMANDS = {
     'drawing.get',
     'drawing.delete',
     'drawing.select_point_set',
+    'drawing.select_recipe',
     'drawing.point_upsert',
     'drawing.point_delete',
     'drawing.point_reorder',
@@ -164,6 +165,7 @@ class HeadlessController:
     ) -> None:
         self.recipe_store = recipe_store or RecipeStore()
         self.drawing_store = drawing_store or DrawingStore()
+        self.drawing_store.recipe_store = self.recipe_store
         self._settings_path = (
             Path(settings_path)
             if settings_path is not None
@@ -1891,6 +1893,13 @@ class HeadlessController:
                 "address": self._address,
             }
 
+        if command in {"drawing.point_upsert", "drawing.calibrate", "drawing.reset_calibration",
+                       "drawing.estimate_pan_tilt", "drawing.estimate_xy"} and params.get("recipe_id"):
+            expected_recipe = self.recipe_store.get_recipe(str(params["recipe_id"])).id
+            drawing = self.drawing_store.get_drawing(str(params["drawing_id"]))
+            if drawing.get("selected_recipe_id") != expected_recipe:
+                raise ValueError("활성 그룹/레시피가 변경되었습니다. 도면을 다시 불러오세요.")
+
         if command == "drawing.list":
             return {"drawings": self.drawing_store.list_drawings()}
         if command == "drawing.get":
@@ -1910,6 +1919,8 @@ class HeadlessController:
             drawing_id = str(params["drawing_id"])
             point = self.drawing_store.upsert_point(drawing_id, params)
             return {"point": point, "drawing": self.drawing_store.get_drawing(drawing_id)}
+        if command == "drawing.select_recipe":
+            return {"drawing": self.drawing_store.select_recipe(str(params["drawing_id"]), str(params["recipe_id"]))}
         if command == "drawing.point_delete":
             self.drawing_store.delete_point(str(params["drawing_id"]), str(params["point_id"]))
             return {"accepted": True, "drawing": self.drawing_store.get_drawing(str(params["drawing_id"]))}
@@ -2505,7 +2516,9 @@ class WebHandler(BaseHTTPRequestHandler):
                 if len(parts) != 4 or parts[0] != "api" or parts[1] != "drawings" or parts[3] != "archive":
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
-                self._send_bytes(self.controller.drawing_store.archive(parts[2]), "application/zip")
+                with self.controller._lock:
+                    payload = self.controller.drawing_store.archive(parts[2])
+                self._send_bytes(payload, "application/zip")
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
         except self._CLIENT_DISCONNECT_ERRORS:

@@ -9,7 +9,9 @@ import re
 import shutil
 import uuid
 import zipfile
-from pathlib import Path
+from copy import deepcopy
+from functools import wraps
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .drawing_calibration import (
@@ -19,8 +21,9 @@ from .drawing_calibration import (
     fit_affine_calibration,
     fit_inverse_xy_calibration,
     load_model_file,
+    predict_product_pose,
 )
-from .recipe_store import RecipeStore, app_state_dir, now_iso
+from .recipe_store import RecipePoint, RecipeStore, app_state_dir, now_iso
 
 SUPPORTED_DRAWING_EXTENSIONS = {
     ".stl",
@@ -47,10 +50,27 @@ CAD_POINT_METADATA = (
     "possible_non_fastening_features",
     "equipment_region",
     "equipment_sequence",
+    "enabled",
     # 최초 0°/0° 티칭값. 제품 자세를 여러 번 변경해도 이 기준값은 유지한다.
     "calibration_pan",
     "calibration_tilt",
 )
+
+
+def _drawing_edit(method):
+    """Keep failed teaching/calculation changes out of the live stores."""
+    @wraps(method)
+    def edit(self, *args, **kwargs):
+        drawings = deepcopy(self._drawings)
+        recipes = deepcopy(self.recipe_store._recipes) if self.recipe_store is not None else None
+        try:
+            return method(self, *args, **kwargs)
+        except Exception:
+            self._drawings = drawings
+            if recipes is not None:
+                self.recipe_store._recipes = recipes
+            raise
+    return edit
 
 
 class DrawingStore:
@@ -64,6 +84,7 @@ class DrawingStore:
         self,
         root: str | Path | None = None,
         package_root: str | Path | None = None,
+        recipe_store: RecipeStore | None = None,
     ) -> None:
         explicit_root = root is not None
         self.root = Path(root) if explicit_root else app_state_dir() / "drawings"
@@ -79,6 +100,7 @@ class DrawingStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.manifest_path = self.root / "drawings.json"
         self._drawings: list[dict[str, Any]] = []
+        self.recipe_store = recipe_store
         self.load()
 
     def load(self) -> None:
@@ -101,11 +123,22 @@ class DrawingStore:
             "drawings": self._drawings,
         }
         temporary = self.manifest_path.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temporary.replace(self.manifest_path)
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        if self.recipe_store is None:
+            temporary.replace(self.manifest_path)
+            return
+        previous = self.recipe_store.path.read_bytes() if self.recipe_store.path.exists() else None
+        self.recipe_store.save()
+        try:
+            temporary.replace(self.manifest_path)
+        except OSError:
+            if previous is None:
+                self.recipe_store.path.unlink(missing_ok=True)
+            else:
+                rollback = self.recipe_store.path.with_suffix(".rollback")
+                rollback.write_bytes(previous)
+                rollback.replace(self.recipe_store.path)
+            raise
 
     def list_drawings(self) -> list[dict[str, Any]]:
         return [
@@ -440,10 +473,22 @@ class DrawingStore:
         state["backup_version"] = 1
         state["points_by_file"] = record.get("points_by_file", {})
         state["calibration_by_file"] = record.get("calibration_by_file", {})
+        if self.recipe_store is not None:
+            document = self.recipe_store.export_document()
+            document["recipes"] = [recipe for recipe in document["recipes"]
+                                   if recipe.get("drawing", {}).get("drawing_id") == drawing_id]
+            if document["recipes"]:
+                state["recipe_document"] = document
         output = io.BytesIO()
         with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
-            for name, path in files.items():
-                archive.write(path, name)
+            if record.get("fvp_archive_path"):
+                with zipfile.ZipFile(record["fvp_archive_path"]) as original:
+                    for entry in original.infolist():
+                        if entry.filename != "monitor_drawing_state.json":
+                            archive.writestr(entry.filename, original.read(entry))
+            else:
+                for name, path in files.items():
+                    archive.write(path, name)
             archive.writestr("monitor_drawing_state.json", json.dumps(state, ensure_ascii=False, indent=2))
         return output.getvalue()
 
@@ -458,21 +503,89 @@ class DrawingStore:
             names: set[str] = set()
             for entry in entries:
                 name = entry.filename
-                if entry.is_dir() or Path(name).name != name or "\\" in name or name in {".", ".."} or name in names:
-                    raise ValueError("drawing archive requires unique flat filenames")
+                if entry.is_dir():
+                    continue
+                if PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts or "\\" in name or ":" in name or name in {".", ".."} or name in names:
+                    raise ValueError("drawing archive contains an invalid or duplicate path")
                 names.add(name)
                 payload = archive.read(entry)
                 if name == "monitor_drawing_state.json":
                     state = json.loads(payload.decode("utf-8"))
                 else:
                     files.append((name, payload))
-        if not isinstance(state, dict) or state.get("backup_schema") != "pt503.drawing.backup" or state.get("backup_version") != 1:
+        if state is not None and (not isinstance(state, dict) or state.get("backup_schema") != "pt503.drawing.backup" or state.get("backup_version") != 1):
             raise ValueError("unsupported drawing backup document")
         if any(Path(name).suffix.lower() == ".zip" for name, _ in files):
             raise ValueError("nested drawing archives are not supported")
-        drawing = self.create_from_uploads(files)
+        product_manifests = [(name, payload) for name, payload in files
+                             if name.startswith("settings/product_library/") and name.endswith("/manifest.json")]
+        if product_manifests:
+            if len(product_manifests) != 1:
+                raise ValueError("제품이 여러 개 들어 있습니다. 제품별 ZIP으로 등록하세요.")
+            drawing = self._create_fvp_package(data, dict(files), product_manifests[0][0], create_recipes=state is None)
+        else:
+            if any(Path(name).name != name for name, _ in files):
+                raise ValueError("drawing backup requires flat asset filenames")
+            drawing = self.create_from_uploads(files)
         try:
-            self._restore_backup_state(drawing["id"], state)
+            if state is not None:
+                self._restore_backup_state(drawing["id"], state)
+        except Exception:
+            self.delete_drawing(drawing["id"])
+            raise
+        return self.get_drawing(drawing["id"])
+
+    def _create_fvp_package(self, data: bytes, files: dict[str, bytes], manifest_name: str,
+                            *, create_recipes: bool) -> dict[str, Any]:
+        source = json.loads(files[manifest_name].decode("utf-8-sig"))
+        if source.get("coordinate_units") != "mm" or source.get("model_units") != "cm":
+            raise ValueError("FVP 제품 좌표는 mm, 모델 단위는 cm여야 합니다.")
+        model_name = str(PurePosixPath(manifest_name).parent / "model.glb")
+        if model_name not in files:
+            raise ValueError("FVP 제품 model.glb가 없습니다.")
+        product_id = str(source.get("product_id") or "")
+        manifest = {"product_id": product_id, "coordinate_frame": "PRODUCT_CAD_STEP_NATIVE",
+                    "units": "mm", "model_rendering": {"model_units_per_mm": 0.1}, "groups": []}
+        groups: dict[int, dict[str, Any]] = {}
+        for recipe in source.get("recipes", []):
+            for point in recipe.get("points", []):
+                group_id = int(point["group_id"])
+                group = groups.setdefault(group_id, {"name": recipe.get("name") or f"그룹 {group_id}", "points": {}})
+                target = str(point.get("target_id") or point.get("source_cad_target_id") or point.get("name") or point["point_id"])
+                converted = {**point, "target_id": target}
+                previous = group["points"].get(target)
+                if previous is not None and previous.get("xyz_mm") != converted.get("xyz_mm"):
+                    raise ValueError(f"FVP 레시피 사이 CAD 좌표가 다릅니다: {target}")
+                group["points"][target] = converted
+        uploads = [("product.glb", files[model_name])]
+        for group_id, group in groups.items():
+            name = f"group_{group_id}.json"
+            manifest["groups"].append({"group_id": group_id, "name": group["name"], "file": name,
+                                       "default_enabled": group_id != 3})
+            payload = {**manifest, "group": {"group_id": group_id}, "points": list(group["points"].values())}
+            uploads.append((name, json.dumps(payload, ensure_ascii=False).encode("utf-8")))
+        uploads.append(("coordinates_manifest.json", json.dumps(manifest, ensure_ascii=False).encode("utf-8")))
+        drawing = self._create_cad_package_from_uploads(uploads)
+        record = self._record(drawing["id"])
+        try:
+            original = self.root / drawing["id"] / "fvp_source.zip"
+            original.write_bytes(data)
+            record["fvp_archive_path"] = str(original)
+            record["name"] = str(source.get("name") or product_id)
+            if create_recipes and self.recipe_store is not None:
+                document = {"schema": "pt503.recipe.bundle", "version": 1, "recipes": []}
+                for item in source.get("recipes", []):
+                    group_ids = {int(point["group_id"]) for point in item.get("points", [])}
+                    if len(group_ids) != 1:
+                        raise ValueError("FVP 레시피는 하나의 그룹에 속해야 합니다.")
+                    point_file = f"group_{next(iter(group_ids))}.json"
+                    targets = {str(point.get("target_id") or point.get("source_cad_target_id") or point.get("name") or point["point_id"]) for point in item["points"]}
+                    points = [deepcopy(point) for point in record["points_by_file"][point_file]
+                              if point["target_id"] in targets]
+                    document["recipes"].append({"id": str(uuid.uuid4()), "name": str(item.get("name") or "Recipe"),
+                                                "points": [], "drawing": self._new_recipe_state(record, point_file, points)})
+                self.recipe_store.import_document(document)
+            self.save()
         except Exception:
             self.delete_drawing(drawing["id"])
             raise
@@ -543,6 +656,31 @@ class DrawingStore:
         if calibration is not None and not isinstance(calibration, dict):
             raise ValueError("invalid backup calibration")
         record["calibration"] = calibration
+        if state.get("recipe_document") is not None:
+            if self.recipe_store is None:
+                raise ValueError("레시피 저장소가 필요합니다.")
+            document = deepcopy(state["recipe_document"])
+            recipes = RecipeStore._validated_document(document)
+            existing_recipe_ids = {recipe.id for recipe in self.recipe_store._recipes}
+            existing_point_ids = {point.id for recipe in self.recipe_store._recipes for point in recipe.points}
+            remapped = {recipe.id: str(uuid.uuid4()) for recipe in recipes if recipe.id in existing_recipe_ids}
+            for recipe, payload in zip(recipes, document["recipes"]):
+                context = recipe.drawing
+                point_file = context.get("point_file")
+                originals = record.get("points_by_file", {}).get(point_file)
+                if context.get("product_id") != record.get("product_id") or originals is None:
+                    raise ValueError("backup recipe does not match CAD package")
+                checked_points(context["points"], [point for point in originals
+                                                  if point["id"] in {p["id"] for p in context["points"]}])
+                payload["drawing"]["drawing_id"] = drawing_id
+                payload["id"] = remapped.get(recipe.id, recipe.id)
+                payload["source_recipe_id"] = remapped.get(payload.get("source_recipe_id"), payload.get("source_recipe_id", ""))
+                for point in payload["points"]:
+                    if point["id"] in existing_point_ids:
+                        point["id"] = str(uuid.uuid4())
+            self.recipe_store.import_document(document)
+            selected = str(state.get("selected_recipe_id") or "")
+            record["selected_recipe_id"] = remapped.get(selected, selected) if any(recipe.id == selected for recipe in recipes) else ""
         record["updated"] = now_iso()
         self.save()
 
@@ -565,18 +703,97 @@ class DrawingStore:
         if point_file not in point_files:
             raise ValueError(f"unknown drawing point file: {point_file}")
         record["selected_point_file"] = point_file
-        record["calibration"] = (record.get("calibration_by_file") or {}).get(point_file)
+        record["selected_recipe_id"] = ""
+        record["calibration"] = None if self.recipe_store is not None else (record.get("calibration_by_file") or {}).get(point_file)
+        record["product_rotation_deg"] = 0.0
+        record["product_tilt_deg"] = 0.0
         record["updated"] = now_iso()
         self.save()
         return self._public_record(record, include_points=True)
 
+    @staticmethod
+    def _new_recipe_state(record: dict[str, Any], point_file: str,
+                          points: list[dict[str, Any]]) -> dict[str, Any]:
+        return {"drawing_id": record["id"], "product_id": record.get("product_id") or record["id"],
+                "point_file": point_file, "points": deepcopy(points), "calibration": None,
+                "product_rotation_deg": 0.0, "product_tilt_deg": 0.0}
+
+    @_drawing_edit
+    def select_recipe(self, drawing_id: str, recipe_id: str) -> dict[str, Any]:
+        if self.recipe_store is None:
+            raise ValueError("레시피 저장소가 필요합니다.")
+        record = self._record(drawing_id)
+        recipe = self.recipe_store.get_recipe(recipe_id)
+        point_file = str(record.get("selected_point_file") or "")
+        if not point_file:
+            raise ValueError("CAD 그룹을 먼저 선택하세요.")
+        if recipe.drawing:
+            if (recipe.drawing.get("product_id") != record.get("product_id")
+                    or recipe.drawing.get("point_file") != point_file):
+                raise ValueError("선택한 레시피는 다른 도면/그룹에 연결되어 있습니다.")
+            originals = {point["id"]: point for point in record["points_by_file"][point_file]}
+            if any(point["id"] not in originals or any(point[key] != originals[point["id"]][key]
+                   for key in ("x", "y", "z")) for point in recipe.drawing["points"]):
+                raise ValueError("레시피 좌표가 원본 CAD 그룹과 다릅니다.")
+            recipe.drawing["drawing_id"] = drawing_id
+        else:
+            points = deepcopy(record["points_by_file"][point_file])
+            for point in points:
+                point.update(pan=None, tilt=None, calibration=False, calibration_slot=None)
+                point.pop("calibration_pan", None)
+                point.pop("calibration_tilt", None)
+            recipe.drawing = self._new_recipe_state(record, point_file, points)
+            # 기존 레시피는 이름이 일치하는 도면 포인트의 티칭값만 가져온다.
+            by_name = {point.name: point for point in recipe.points}
+            by_target = {}
+            for point in recipe.points:
+                source_key = point.note.splitlines()[0] if point.note else ""
+                target = point.drawing_point_id or (source_key.rsplit(" ", 1)[-1] if source_key.startswith("CAD_TARGET ") else "")
+                if target:
+                    by_target[target] = point
+            imported = 0
+            for point in recipe.drawing["points"]:
+                taught = by_target.get(point["id"]) or by_name.get(point.get("label"))
+                if taught is not None:
+                    point.update(pan=taught.pan, tilt=taught.tilt)
+                    imported += 1
+            if recipe.points and not imported:
+                raise ValueError("선택한 그룹과 일치하는 레시피 포인트가 없습니다.")
+        record["selected_recipe_id"] = recipe.id
+        self.save()
+        return self.get_drawing(drawing_id)
+
+    def _context(self, record: dict[str, Any]) -> dict[str, Any]:
+        recipe_id = record.get("selected_recipe_id")
+        if recipe_id and self.recipe_store is not None:
+            try:
+                context = self.recipe_store.get_recipe(recipe_id).drawing
+            except KeyError:
+                context = {}
+            if (context.get("drawing_id") == record["id"]
+                    and context.get("point_file") == record.get("selected_point_file")):
+                return context
+        return record
+
+    def _set_points(self, record: dict[str, Any], points: list[dict[str, Any]]) -> None:
+        context = self._context(record)
+        if context is not record:
+            context["points"] = points
+        elif record.get("source_kind") in CAD_PACKAGE_KINDS:
+            record.setdefault("points_by_file", {})[record["selected_point_file"]] = points
+        else:
+            record["points"] = points
+
+    @_drawing_edit
     def upsert_point(self, drawing_id: str, params: dict[str, Any]) -> dict[str, Any]:
         record = self._record(drawing_id)
-        points = self._points(record)
+        points = deepcopy(self._points(record))
         point_id = str(params.get("point_id") or "")
         if point_id:
             point = self._find_point(points, point_id)
         else:
+            if record.get("source_kind") in CAD_PACKAGE_KINDS:
+                raise ValueError("원본 CAD 그룹에 포인트를 추가할 수 없습니다.")
             point = {
                 "id": str(uuid.uuid4()),
                 "x": 0.0,
@@ -590,17 +807,28 @@ class DrawingStore:
             }
             points.append(point)
 
+        context = self._context(record)
+        if any(key in params for key in ("pan", "tilt", "calibration")) and (
+                context.get("product_rotation_deg", 0) or context.get("product_tilt_deg", 0)):
+            raise ValueError("기준점 재티칭은 제품 0°/0°에서 수행하세요.")
         if "calibration" in params:
             requested_calibration = bool(params["calibration"])
-            if requested_calibration and not point.get("calibration"):
-                selected = [item for item in points if item.get("calibration") and item is not point]
-                if len(selected) >= 10:
-                    raise ValueError("캘리브레이션 기준점은 최대 10개까지 선택할 수 있습니다.")
             point["calibration"] = requested_calibration
         for key in ("x", "y", "z", "pan", "tilt"):
             if key in params:
                 value = params[key]
+                if record.get("source_kind") in CAD_PACKAGE_KINDS and key in ("x", "y", "z") and value != point.get(key):
+                    raise ValueError("원본 CAD 좌표는 수정할 수 없습니다.")
+                if value not in ("", None) and not math.isfinite(float(value)):
+                    raise ValueError(f"{key} must be finite")
                 point[key] = None if value in ("", None) else float(value)
+        if point.get("pan") is not None:
+            point["pan"] %= 360.0
+        if point.get("tilt") is not None and not -60 <= point["tilt"] <= 60:
+            raise ValueError("Tilt must be within -60..60")
+        if ("pan" in params or "tilt" in params) and point.get("calibration"):
+            point.pop("calibration_pan", None)
+            point.pop("calibration_tilt", None)
         if "label" in params:
             point["label"] = str(params.get("label") or "")
         if point.get("calibration") and point.get("calibration_slot") is None:
@@ -611,12 +839,8 @@ class DrawingStore:
             point.pop("calibration_tilt", None)
 
         updated_points = [_point_payload(item) for item in points]
-        if record.get("source_kind") in CAD_PACKAGE_KINDS:
-            record.setdefault("points_by_file", {})[
-                str(record.get("selected_point_file") or "")
-            ] = updated_points
-        else:
-            record["points"] = updated_points
+        self._set_points(record, updated_points)
+        self._context(record)["calibration"] = None
         record["updated"] = now_iso()
         self.save()
         return self._public_point(point, points.index(point) + 1)
@@ -743,7 +967,7 @@ class DrawingStore:
         capture_zero_pose: bool,
     ) -> list[DrawingPoint]:
         raw_points = self._points(record)
-        previous_calibration = record.get("calibration") or {}
+        previous_calibration = self._context(record).get("calibration") or {}
         previous_rotation = float(previous_calibration.get("product_rotation_deg", 0.0) or 0.0)
         previous_tilt = float(previous_calibration.get("product_tilt_deg", 0.0) or 0.0)
         previous_is_zero = abs(previous_rotation) < 1e-9 and abs(previous_tilt) < 1e-9
@@ -786,6 +1010,7 @@ class DrawingStore:
 
         return reference_points
 
+    @_drawing_edit
     def calibrate(
         self,
         drawing_id: str,
@@ -826,14 +1051,13 @@ class DrawingStore:
                 pan = float(reference.pan)
                 tilt = float(reference.tilt)
             else:
-                posed, _ = self._posed_product_position(
-                    record,
-                    point.position,
-                    product_rotation_deg,
-                    product_tilt_deg,
-                )
-                target = DrawingPoint.create(posed)
-                pan, tilt = fit.predict(target)
+                if zero_pose:
+                    pan, tilt = fit.predict(point)
+                else:
+                    pan, tilt, _ = predict_product_pose(
+                        fit, point.position, center, rotation_axis, tilt_axis,
+                        product_rotation_deg, product_tilt_deg,
+                    )
 
             payload = point.to_dict()
             payload["pan"] = round(float(pan) % 360.0, 2)
@@ -843,11 +1067,7 @@ class DrawingStore:
                     payload[key] = raw[key]
             calibrated_points.append(payload)
 
-        if record.get("source_kind") in CAD_PACKAGE_KINDS:
-            selected_file = str(record.get("selected_point_file") or "")
-            record.setdefault("points_by_file", {})[selected_file] = calibrated_points
-        else:
-            record["points"] = calibrated_points
+        self._set_points(record, calibrated_points)
 
         calibration = {
             "updated": now_iso(),
@@ -865,10 +1085,11 @@ class DrawingStore:
             "tilt_axis": self._pose_axis_name(tilt_axis),
             "reference_pose": {"rotation_deg": 0.0, "tilt_deg": 0.0},
         }
-        record["product_rotation_deg"] = product_rotation_deg
-        record["product_tilt_deg"] = product_tilt_deg
-        record["calibration"] = calibration
-        if record.get("source_kind") in CAD_PACKAGE_KINDS:
+        context = self._context(record)
+        context["product_rotation_deg"] = product_rotation_deg
+        context["product_tilt_deg"] = product_tilt_deg
+        context["calibration"] = calibration
+        if context is record and record.get("source_kind") in CAD_PACKAGE_KINDS:
             record.setdefault("calibration_by_file", {})[
                 str(record.get("selected_point_file") or "")
             ] = calibration
@@ -876,11 +1097,13 @@ class DrawingStore:
         self.save()
         return self._public_record(record, include_points=True)
 
+    @_drawing_edit
     def reset_calibration(self, drawing_id: str) -> dict[str, Any]:
         record = self._record(drawing_id)
+        context = self._context(record)
         point_groups = (
             record.get("points_by_file", {}).values()
-            if record.get("source_kind") in CAD_PACKAGE_KINDS
+            if context is record and record.get("source_kind") in CAD_PACKAGE_KINDS
             else (self._points(record),)
         )
         for points in point_groups:
@@ -891,10 +1114,17 @@ class DrawingStore:
                 point["calibration_slot"] = None
                 point.pop("calibration_pan", None)
                 point.pop("calibration_tilt", None)
-        record["calibration"] = None
-        record["product_rotation_deg"] = 0.0
-        record["product_tilt_deg"] = 0.0
-        if record.get("source_kind") in CAD_PACKAGE_KINDS:
+        context["calibration"] = None
+        context["product_rotation_deg"] = 0.0
+        context["product_tilt_deg"] = 0.0
+        if context is not record:
+            recipe = self.recipe_store.get_recipe(record["selected_recipe_id"])
+            recipe.product_rotation_deg = recipe.product_tilt_deg = 0.0
+            recipe.pose_applied = False
+            cleared_ids = {point["id"] for point in context["points"]}
+            recipe.points = [point for point in recipe.points if point.drawing_point_id not in cleared_ids]
+            recipe.normalize_orders()
+        elif record.get("source_kind") in CAD_PACKAGE_KINDS:
             record["calibration_by_file"] = {}
         record["updated"] = now_iso()
         self.save()
@@ -941,15 +1171,22 @@ class DrawingStore:
             if z is not None
             else sum(point.z for point in taught) / len(taught)
         )
-        product_rotation_deg = float(record.get("product_rotation_deg", 0.0) or 0.0)
-        product_tilt_deg = float(record.get("product_tilt_deg", 0.0) or 0.0)
+        context = self._context(record)
+        product_rotation_deg = float(context.get("product_rotation_deg", 0.0) or 0.0)
+        product_tilt_deg = float(context.get("product_tilt_deg", 0.0) or 0.0)
         posed, frame = self._posed_product_position(
             record,
             (float(x), float(y), target_z),
             product_rotation_deg,
             product_tilt_deg,
         )
-        pan, tilt = fit.predict(DrawingPoint.create(posed))
+        if product_rotation_deg or product_tilt_deg:
+            pan, tilt, posed = predict_product_pose(
+                fit, (float(x), float(y), target_z), frame["center"],
+                frame["rotation_axis"], frame["tilt_axis"], product_rotation_deg, product_tilt_deg,
+            )
+        else:
+            pan, tilt = fit.predict(DrawingPoint.create(posed))
         return {
             "pan": pan,
             "tilt": tilt,
@@ -976,6 +1213,22 @@ class DrawingStore:
         recipe_id: str,
     ) -> dict[str, Any]:
         recipe = recipe_store.get_recipe(recipe_id)
+        record = self._record(drawing_id)
+        if recipe.drawing:
+            # 다른 레시피의 활성 보정으로 계산하지 않는다.
+            if recipe.drawing.get("product_id") != record.get("product_id"):
+                raise ValueError("레시피와 도면이 일치하지 않습니다.")
+            points = [DrawingPoint.from_dict(point) for point in recipe.drawing["points"]]
+            fit = fit_inverse_xy_calibration(points)
+            estimates = []
+            for point in recipe.points:
+                x, y = fit.predict(point.pan, point.tilt)
+                estimates.append({"point_id": point.id, "x": x, "y": y, "z": None,
+                                  "z_status": "unconfirmed", "z_reason": "Pan/Tilt does not determine contact Z.",
+                                  "units": "drawing_units", "coordinate_frame": f"drawing:{drawing_id}",
+                                  "points_used": fit.points_used,
+                                  "rms_x_error": round(fit.rms_x_error, 4), "rms_y_error": round(fit.rms_y_error, 4)})
+            return {"drawing_id": drawing_id, "recipe_id": recipe.id, "estimates": estimates}
         estimates = []
         for point in recipe.points:
             estimate = self.estimate_xy(drawing_id, point.pan, point.tilt)
@@ -989,6 +1242,12 @@ class DrawingStore:
     def export_to_recipe(self, drawing_id: str, recipe_store: RecipeStore, recipe_id: str) -> dict[str, Any]:
         record = self._record(drawing_id)
         recipe = recipe_store.get_recipe(recipe_id)
+        context = self._context(record)
+        if recipe.drawing and (recipe.drawing.get("product_id") != record.get("product_id")
+                               or recipe.drawing.get("point_file") != record.get("selected_point_file")):
+            raise ValueError("다른 도면/그룹에 연결된 레시피에는 저장할 수 없습니다.")
+        previous = deepcopy(recipe_store._recipes)
+        updated = deepcopy(recipe)
         exported = 0
         for index, point in enumerate(self._points(record), start=1):
             if point.get("pan") is None or point.get("tilt") is None:
@@ -1007,20 +1266,34 @@ class DrawingStore:
             existing = next(
                 (
                     recipe_point
-                    for recipe_point in recipe.points
-                    if recipe_point.note.splitlines()[:1] == [source_key]
+                    for recipe_point in updated.points
+                    if recipe_point.drawing_point_id == point["id"] or recipe_point.note.splitlines()[:1] == [source_key]
                 ),
                 None,
             )
-            recipe_store.upsert_point(
-                recipe_id,
-                point_id=existing.id if existing is not None else None,
-                name=label,
-                pan=float(point["pan"]),
-                tilt=float(point["tilt"]),
-                note=note,
-            )
+            if existing is None:
+                existing = RecipePoint.create(label, float(point["pan"]), float(point["tilt"]),
+                                              order=len(updated.points) + 1, note=note)
+                updated.points.append(existing)
+                existing.enabled = bool(point.get("enabled", True))
+            else:
+                existing.name, existing.pan, existing.tilt, existing.note = label, float(point["pan"]), float(point["tilt"]), note
+            existing.drawing_point_id = str(point["id"])
+            existing.updated = now_iso()
             exported += 1
+        if not exported:
+            raise ValueError("저장할 Pan/Tilt 값이 없습니다. 기준점을 티칭하고 캘리브레이션하세요.")
+        if record.get("source_kind") in CAD_PACKAGE_KINDS:
+            state = self._new_recipe_state(record, record["selected_point_file"], self._points(record))
+            for key in ("calibration", "product_rotation_deg", "product_tilt_deg"):
+                state[key] = deepcopy(context.get(key, state[key]))
+            updated.drawing = state
+            updated.product_rotation_deg = state["product_rotation_deg"]
+            updated.product_tilt_deg = state["product_tilt_deg"]
+            updated.pose_applied = True
+        updated.updated = now_iso()
+        recipe_store._recipes = [updated if item.id == recipe.id else item for item in recipe_store._recipes]
+        recipe_store._save_or_restore(previous)
         return {
             "exported": exported,
             "recipe": recipe_store.get_recipe(recipe_id).to_dict(),
@@ -1029,6 +1302,10 @@ class DrawingStore:
     def import_from_recipe(self, drawing_id: str, recipe_store: RecipeStore, recipe_id: str) -> dict[str, Any]:
         record = self._record(drawing_id)
         recipe = recipe_store.get_recipe(recipe_id)
+        if recipe.drawing or (self.recipe_store is not None and record.get("source_kind") in CAD_PACKAGE_KINDS):
+            self.recipe_store = recipe_store
+            drawing = self.select_recipe(drawing_id, recipe.id)
+            return {"imported": len(drawing["points"]), "drawing": drawing}
         if record.get("source_kind") in CAD_PACKAGE_KINDS:
             points = self._points(record)
             by_source_key = {
@@ -1095,6 +1372,9 @@ class DrawingStore:
         raise KeyError(f"unknown drawing: {drawing_id}")
 
     def _points(self, record: dict[str, Any]) -> list[dict[str, Any]]:
+        context = self._context(record)
+        if context is not record:
+            return context["points"]
         if record.get("source_kind") in CAD_PACKAGE_KINDS:
             point_file = str(record.get("selected_point_file") or "")
             points_by_file = record.setdefault("points_by_file", {})
@@ -1114,6 +1394,7 @@ class DrawingStore:
         raise KeyError(f"unknown drawing point: {point_id}")
 
     def _public_record(self, record: dict[str, Any], *, include_points: bool) -> dict[str, Any]:
+        context = self._context(record)
         result = {
             "id": str(record.get("id")),
             "name": str(record.get("name") or record.get("source_filename") or "Drawing"),
@@ -1127,9 +1408,10 @@ class DrawingStore:
             "face_count": int(record.get("face_count") or 0),
             "web_vertex_count": int(record.get("web_vertex_count") or 0),
             "web_face_count": int(record.get("web_face_count") or 0),
-            "calibration": record.get("calibration"),
-            "product_rotation_deg": float(record.get("product_rotation_deg", 0.0) or 0.0),
-            "product_tilt_deg": float(record.get("product_tilt_deg", 0.0) or 0.0),
+            "calibration": context.get("calibration"),
+            "selected_recipe_id": record.get("selected_recipe_id", "") if context is not record else "",
+            "product_rotation_deg": float(context.get("product_rotation_deg", 0.0) or 0.0),
+            "product_tilt_deg": float(context.get("product_tilt_deg", 0.0) or 0.0),
             "point_count": len(record.get("points") or []),
             "deletable": record.get("source_kind") != "cad_package",
         }
@@ -1147,11 +1429,17 @@ class DrawingStore:
                     "model_url": f"/api/drawings/{record.get('id')}/model",
                 }
             )
+            center, rotation_axis, tilt_axis, _ = self._product_pose_frame(record)
+            result["pose_frame"] = {"center": list(center), "rotation_axis": rotation_axis, "tilt_axis": tilt_axis}
         if include_points:
             result["points"] = [
                 self._public_point(point, index)
                 for index, point in enumerate(self._points(record), start=1)
             ]
+        if self.recipe_store is not None and record.get("source_kind") in CAD_PACKAGE_KINDS and context is record:
+            result.update(calibration=None, product_rotation_deg=0.0, product_tilt_deg=0.0)
+            for point in result.get("points", []):
+                point.update(pan=None, tilt=None, calibration=False, calibration_slot=None)
         return result
 
     def _public_point(self, point: dict[str, Any], order: int) -> dict[str, Any]:

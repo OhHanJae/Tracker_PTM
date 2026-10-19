@@ -421,6 +421,10 @@ def predict_product_pose(
         for component in range(3)
     )
     offset = [position[axis] - pivot[axis] for axis in range(3)]
+    original_local = tuple(
+        at_pivot[component] + sum(basis[axis][component] * offset[axis] for axis in range(3))
+        for component in range(3)
+    )
     for axis, degrees in ((rotation_axis, rotation_deg), (tilt_axis, tilt_deg)):
         radians = math.radians(degrees)
         cosine, sine = math.cos(radians), math.sin(radians)
@@ -442,9 +446,21 @@ def predict_product_pose(
     )
     pan = math.degrees(math.atan2(direction[0], direction[2])) % 360.0
     tilt = math.degrees(math.atan2(direction[1], math.hypot(direction[0], direction[2])))
+    if original_local[2] <= 1e-6:
+        raise CalibrationError("기준 포인트가 모터 뒤쪽에 있습니다.")
+    original_direction = _motor_direction_from_image(
+        original_local[0] / original_local[2], original_local[1] / original_local[2],
+        fit.pan_origin, fit.tilt_origin,
+    )
+    original_pan = math.degrees(math.atan2(original_direction[0], original_direction[2])) % 360.0
+    original_tilt = math.degrees(math.atan2(original_direction[1], math.hypot(original_direction[0], original_direction[2])))
+    # Retain each point's taught/projective residual correction through a pose change.
+    reference_pan, reference_tilt = fit.predict(DrawingPoint.create(position))
+    pan = (reference_pan + (pan - original_pan + 180.0) % 360.0 - 180.0) % 360.0
+    tilt = reference_tilt + tilt - original_tilt
     if not -60.0 <= tilt <= 60.0:
         raise CalibrationError("보정된 Tilt가 장비 이동 범위를 벗어났습니다.")
-    return round(pan, 2), round(tilt, 2), transformed  # type: ignore[return-value]
+    return round(pan, 2) % 360.0, round(tilt, 2), transformed  # type: ignore[return-value]
 
 
 def _fit_planar_projective_calibration(

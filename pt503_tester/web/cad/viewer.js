@@ -150,7 +150,11 @@ export async function createStandaloneViewer({
     const gltf = await loadGlb(modelUrl);
     const model = gltf.scene;
     prepareModel(model);
-    scene.add(model);
+    const poseRoot = new THREE.Group();
+    poseRoot.matrixAutoUpdate = false;
+    poseRoot.add(model);
+    scene.add(poseRoot);
+    const poseMatrix = new THREE.Matrix4();
 
     const bounds = new THREE.Box3().setFromObject(model);
     if (bounds.isEmpty())
@@ -244,7 +248,7 @@ export async function createStandaloneViewer({
                 Number(xyz[0] || 0) * MODEL_UNITS_PER_MM,
                 Number(xyz[1] || 0) * MODEL_UNITS_PER_MM,
                 Number(xyz[2] || 0) * MODEL_UNITS_PER_MM
-            ).project(camera);
+            ).applyMatrix4(poseMatrix).project(camera);
             const visible = item.world.z >= -1 && item.world.z <= 1 &&
                 item.world.x >= -1.05 && item.world.x <= 1.05 &&
                 item.world.y >= -1.05 && item.world.y <= 1.05;
@@ -310,6 +314,22 @@ export async function createStandaloneViewer({
     draw();
 
     return {
+        setPose(frame, rotation = 0, tilt = 0)
+        {
+            poseMatrix.identity();
+            if (frame)
+            {
+                const pivot = new THREE.Vector3(...frame.center).multiplyScalar(MODEL_UNITS_PER_MM);
+                const axis = index => new THREE.Vector3(...[0, 1, 2].map(value => value === index ? 1 : 0));
+                poseMatrix.makeTranslation(pivot.x, pivot.y, pivot.z)
+                    .multiply(new THREE.Matrix4().makeRotationAxis(axis(frame.tilt_axis), THREE.MathUtils.degToRad(tilt)))
+                    .multiply(new THREE.Matrix4().makeRotationAxis(axis(frame.rotation_axis), THREE.MathUtils.degToRad(rotation)))
+                    .multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
+            }
+            poseRoot.matrix.copy(poseMatrix);
+            poseRoot.matrixWorldNeedsUpdate = true;
+            render();
+        },
         setPoints(value)
         {
             currentPoints = Array.isArray(value) ? value : [];
@@ -348,7 +368,7 @@ export async function createStandaloneViewer({
             controls.removeEventListener('change', requestRender);
             controls.dispose();
             pointLayer.replaceChildren();
-            scene.remove(model);
+            scene.remove(poseRoot);
             disposeObject(model);
             environmentTarget.dispose();
             pmrem.dispose();
