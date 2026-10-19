@@ -247,7 +247,10 @@ body:has(#drawings:not([hidden])) > main { flex: 1; min-height: 0; width: 100%; 
 #drawings { display: flex; flex-direction: column; height: 100%; }
 #drawings > .toolbar { flex-shrink: 0; margin-bottom: 12px; }
 .drawing-calibration-layout { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0,1.6fr) minmax(0,1fr); grid-template-rows: minmax(0,1fr); gap: 18px; }
-.drawing-calibration-panel { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 6px; }
+.drawing-calibration-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.drawing-calibration-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 6px; }
+.drawing-calibration-actions { display: grid; flex-shrink: 0; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); background: var(--panel); }
+.drawing-calibration-actions > .toolbar:not(.calibration-motion-controls) { padding: 0; }
 .drawing-calibration-panel .drawing-point-scroll { max-height: none; }
 .drawing-view-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .drawing-view-panel .cad-stage { flex: 1; min-height: 0; }

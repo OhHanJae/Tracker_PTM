@@ -153,40 +153,44 @@
                     <output id="drawingInfo">도면 없음</output>
                 </section>
                 <aside class="drawing-calibration-panel">
-                    <h2>도면 포인트 설정</h2>
-                    <label><input id="drawingPointLabels" type="checkbox">포인트 ID 보이기</label>
-                    <div id="drawingPointSets" class="cad-groups"></div>
-                    <div class="toolbar"><label>그룹 레시피<select id="drawingActiveRecipe" aria-label="그룹 레시피"></select></label><button id="newDrawingRecipe" type="button">새 레시피</button></div>
-                    <p id="drawingWorkflowStatus" role="status"></p>
-                    <p id="drawingCalibrationInfo">도면 영역을 넓게 둘러싸는 기준점을 최소 4개 지정하고 현재 Pan/Tilt를 적용하세요. 기준점을 더 추가하면 국부 오차도 보정합니다.</p>
-                    <div class="toolbar drawing-pose-controls">
-                        <label>제품 회전각 °<input id="drawingProductRotation" type="number" min="-360" max="360" step="0.1" value="0"></label>
-                        <label>제품 틸팅각 °<input id="drawingProductTilt" type="number" min="-360" max="360" step="0.1" value="0"></label>
-                        <output id="drawingPoseStatus">0° / 0° 기준 캘리브레이션</output>
+                    <div class="drawing-calibration-scroll">
+                        <h2>도면 포인트 설정</h2>
+                        <label><input id="drawingPointLabels" type="checkbox">포인트 ID 보이기</label>
+                        <div id="drawingPointSets" class="cad-groups"></div>
+                        <div class="toolbar"><label>그룹 레시피<select id="drawingActiveRecipe" aria-label="그룹 레시피"></select></label><button id="newDrawingRecipe" type="button">새 레시피</button></div>
+                        <p id="drawingWorkflowStatus" role="status"></p>
+                        <p id="drawingCalibrationInfo">도면 영역을 넓게 둘러싸는 기준점을 최소 4개 지정하고 현재 Pan/Tilt를 적용하세요. 기준점을 더 추가하면 국부 오차도 보정합니다.</p>
+                        <div class="toolbar drawing-pose-controls">
+                            <label>제품 회전각 °<input id="drawingProductRotation" type="number" min="-360" max="360" step="0.1" value="0"></label>
+                            <label>제품 틸팅각 °<input id="drawingProductTilt" type="number" min="-360" max="360" step="0.1" value="0"></label>
+                            <output id="drawingPoseStatus">0° / 0° 기준 캘리브레이션</output>
+                        </div>
+                        <p class="cad-warning">그룹 → 레시피를 선택한 후 제품 0°/0°에서 기준점을 티칭하세요. 회전/틸팅 각도를 바꾸고 캘리브레이션하면 3D 자세로 변환합니다. 계산한 이동값은 ‘레시피로 저장’으로 반영합니다.</p>
+                        <div class="table-scroll drawing-point-scroll">
+                            <table class="drawing-point-table">
+                                <thead><tr><th>#</th><th>Target ID</th><th>X</th><th>Y</th><th>Z</th><th>기준</th><th>Pan</th><th>Tilt</th></tr></thead>
+                                <tbody id="drawingPoints"></tbody>
+                            </table>
+                        </div>
+                        <p class="cad-warning">좌표는 mm로 보존되며 GLB 렌더링에만 ×0.1을 적용합니다. contact-Z 미인증 값은 실제 체결 깊이로 사용하지 않습니다.</p>
                     </div>
-                    <p class="cad-warning">그룹 → 레시피를 선택한 후 제품 0°/0°에서 기준점을 티칭하세요. 회전/틸팅 각도를 바꾸고 캘리브레이션하면 3D 자세로 변환합니다. 계산한 이동값은 ‘레시피로 저장’으로 반영합니다.</p>
-                    <div class="toolbar calibration-motion-controls">
-                        <output id="drawingSpeedLevel">수동 속도 5단계 (30%)</output>
-                        <label><input id="drawingMoveXY" type="checkbox">XY 좌표로 이동</label>
-                        <button id="moveDrawingPoint" type="button">선택 포인트 이동</button>
+                    <div class="drawing-calibration-actions">
+                        <div class="toolbar calibration-motion-controls">
+                            <output id="drawingSpeedLevel">수동 속도 5단계 (30%)</output>
+                            <label><input id="drawingMoveXY" type="checkbox">XY 좌표로 이동</label>
+                            <button id="moveDrawingPoint" type="button">선택 포인트 이동</button>
+                        </div>
+                        <div class="toolbar">
+                            <button id="applyCurrentDrawingPoint" type="button">현재값으로 적용</button>
+                            <button id="toggleCalibrationPoint" type="button">캘리브레이션 포인트로 선택</button>
+                            <button id="calibrateDrawing" type="button">캘리브레이션</button>
+                            <button id="resetDrawingCalibration" type="button">보정 초기화</button>
+                        </div>
+                        <div class="toolbar">
+                            <button id="exportDrawingRecipe" type="button">레시피로 저장</button>
+                            <button id="importDrawingRecipe" type="button">레시피에서 불러오기</button>
+                        </div>
                     </div>
-                    <div class="toolbar">
-                        <button id="applyCurrentDrawingPoint" type="button">현재값으로 적용</button>
-                        <button id="toggleCalibrationPoint" type="button">캘리브레이션 포인트로 선택</button>
-                        <button id="calibrateDrawing" type="button">캘리브레이션</button>
-                        <button id="resetDrawingCalibration" type="button">보정 초기화</button>
-                    </div>
-                    <div class="toolbar">
-                        <button id="exportDrawingRecipe" type="button">레시피로 저장</button>
-                        <button id="importDrawingRecipe" type="button">레시피에서 불러오기</button>
-                    </div>
-                    <div class="table-scroll drawing-point-scroll">
-                        <table class="drawing-point-table">
-                            <thead><tr><th>#</th><th>Target ID</th><th>X</th><th>Y</th><th>Z</th><th>기준</th><th>Pan</th><th>Tilt</th></tr></thead>
-                            <tbody id="drawingPoints"></tbody>
-                        </table>
-                    </div>
-                    <p class="cad-warning">좌표는 mm로 보존되며 GLB 렌더링에만 ×0.1을 적용합니다. contact-Z 미인증 값은 실제 체결 깊이로 사용하지 않습니다.</p>
                 </aside>
             </div>
             <dialog id="drawingRecipeDialog">
