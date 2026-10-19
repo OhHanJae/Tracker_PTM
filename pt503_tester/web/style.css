@@ -240,9 +240,18 @@ output { padding: 8px 0; }
 #drawingPoseStatus { color: #2165c5; font-weight: 700; }
 #recipeProductRotation[readonly], #recipeProductTilt[readonly] { background: #f1f4f7; color: #687583; cursor: default; }
 .drawing-layout { display: grid; grid-template-columns: minmax(420px,2fr) minmax(380px,1fr); gap: 24px; }
-.drawing-calibration-layout { display: grid; grid-template-columns: minmax(520px,1.6fr) minmax(480px,1fr); gap: 18px; }
-.drawing-calibration-panel { min-width: 0; }
-.drawing-view-panel { min-width: 0; }
+body:has(#drawings:not([hidden])) { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+body:has(#drawings:not([hidden])) > header,
+body:has(#drawings:not([hidden])) > nav { flex-shrink: 0; }
+body:has(#drawings:not([hidden])) > main { flex: 1; min-height: 0; width: 100%; padding-bottom: 14px; }
+#drawings { display: flex; flex-direction: column; height: 100%; }
+#drawings > .toolbar { flex-shrink: 0; margin-bottom: 12px; }
+.drawing-calibration-layout { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0,1.6fr) minmax(0,1fr); grid-template-rows: minmax(0,1fr); gap: 18px; }
+.drawing-calibration-panel { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 6px; }
+.drawing-calibration-panel .drawing-point-scroll { max-height: none; }
+.drawing-view-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.drawing-view-panel .cad-stage { flex: 1; min-height: 0; }
+#cadSelection { flex-shrink: 0; max-height: 120px; margin: 10px 0 4px; }
 .drawing-progress { margin: 4px 0 12px; padding: 11px 13px; background: var(--panel-soft); border: 1px solid var(--line); border-radius: 9px; }
 .drawing-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .drawing-progress progress { width: 100%; height: 10px; margin: 8px 0 4px; accent-color: var(--accent); }
@@ -343,7 +352,8 @@ dialog::backdrop { background: #0b172899; }
 [hidden] { display: none !important; }
 @media (max-width: 900px) {
     .drawing-layout { grid-template-columns: 1fr; }
-    .drawing-calibration-layout { grid-template-columns: 1fr; }
+    .drawing-calibration-layout { grid-template-columns: 1fr; grid-template-rows: minmax(0,1.2fr) minmax(0,1fr); }
+    #cadSelection { max-height: 72px; }
     #drawingCanvas { min-height: 340px; }
     .cad-layout { grid-template-columns: 1fr; }
     .cad-stage { min-height: 480px; }

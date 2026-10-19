@@ -173,6 +173,8 @@ export async function createStandaloneViewer({
     let animationFrame = 0;
     let lastWidth = 0;
     let lastHeight = 0;
+    let pointPress = null;
+    const pointSurface = canvas.parentElement;
 
     function fitModel(direction = DEFAULT_DIRECTION)
     {
@@ -231,7 +233,7 @@ export async function createStandaloneViewer({
             marker.title = point.target_id;
             marker.addEventListener('click', event => {
                 event.stopPropagation();
-                select(point);
+                if (event.detail === 0) select(point);
             });
             pointLayer.appendChild(marker);
             return {point, marker, world: new THREE.Vector3()};
@@ -304,6 +306,62 @@ export async function createStandaloneViewer({
         render();
     }
 
+    function pointAtPointer(event)
+    {
+        let nearest = null;
+        let distance = event.pointerType === 'touch' ? 22 : 14;
+        for (const item of markers)
+        {
+            if (item.marker.hidden) continue;
+            const rect = item.marker.getBoundingClientRect();
+            const next = Math.hypot(event.clientX - rect.left - rect.width / 2,
+                event.clientY - rect.top - rect.height / 2);
+            if (next < distance)
+            {
+                nearest = item.point;
+                distance = next;
+            }
+        }
+        return nearest;
+    }
+
+    function pointPointerDown(event)
+    {
+        pointPress = null;
+        if (event.button !== 0 || event.isPrimary === false) return;
+        pointPress = {id: event.pointerId, x: event.clientX, y: event.clientY,
+            point: pointAtPointer(event), moved: false};
+        if (pointPress.point) event.preventDefault();
+    }
+
+    function pointPointerMove(event)
+    {
+        if (pointPress?.id === event.pointerId &&
+            Math.hypot(event.clientX - pointPress.x, event.clientY - pointPress.y) > 6)
+        {
+            pointPress.moved = true;
+        }
+    }
+
+    function pointPointerUp(event)
+    {
+        const press = pointPress;
+        pointPress = null;
+        if (!press || press.id !== event.pointerId || press.moved ||
+            Math.hypot(event.clientX - press.x, event.clientY - press.y) > 6) return;
+        const point = press.point || pointAtPointer(event);
+        if (point && currentPoints.includes(point)) select(point);
+    }
+
+    function pointPointerCancel()
+    {
+        pointPress = null;
+    }
+
+    pointSurface.addEventListener('pointerdown', pointPointerDown, true);
+    pointSurface.addEventListener('pointermove', pointPointerMove, true);
+    pointSurface.addEventListener('pointerup', pointPointerUp, true);
+    pointSurface.addEventListener('pointercancel', pointPointerCancel, true);
     controls.addEventListener('change', requestRender);
     const resizeObserver = new ResizeObserver(requestRender);
     resizeObserver.observe(canvas);
@@ -365,6 +423,10 @@ export async function createStandaloneViewer({
                 window.cancelAnimationFrame(animationFrame);
             }
             resizeObserver.disconnect();
+            pointSurface.removeEventListener('pointerdown', pointPointerDown, true);
+            pointSurface.removeEventListener('pointermove', pointPointerMove, true);
+            pointSurface.removeEventListener('pointerup', pointPointerUp, true);
+            pointSurface.removeEventListener('pointercancel', pointPointerCancel, true);
             controls.removeEventListener('change', requestRender);
             controls.dispose();
             pointLayer.replaceChildren();

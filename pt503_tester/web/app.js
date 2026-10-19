@@ -5702,7 +5702,14 @@ function focusDrawingPointRow(pointId)
     if (row)
     {
         row.focus({preventScroll: true});
-        row.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+        const panel = row.closest('.drawing-calibration-panel');
+        if (!panel) return;
+        const top = panel.getBoundingClientRect().top + panel.clientTop;
+        const bottom = top + panel.clientHeight;
+        const bounds = row.getBoundingClientRect();
+        const offset = bounds.top < top ? bounds.top - top
+            : bounds.bottom > bottom ? bounds.bottom - bottom : 0;
+        if (offset) panel.scrollBy({top: offset, behavior: 'smooth'});
     }
 }
 
