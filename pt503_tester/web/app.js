@@ -1829,7 +1829,8 @@ function updateRecipeTestButtons()
         const id
         of [
             'runRecipeSequence',
-            'runRecipeRandom'
+            'runRecipeRandom',
+            'recipeTestLaserMs'
         ]
     )
     {
@@ -1861,7 +1862,7 @@ function sleep(ms)
 }
 
 
-async function waitForRecipeMotion(point, motionId)
+async function waitForRecipeMotion(motionId)
 {
     const completion =
         status.motion?.completion || {};
@@ -1917,25 +1918,10 @@ async function waitForRecipeMotion(point, motionId)
     }
 
 
-    const dwellMs =
-        Math.max(
-            0,
-            Number(point.dwell_ms || 0)
-        );
-
-
-    if (dwellMs)
-    {
-        const dwellDeadline = Date.now() + dwellMs;
-        while (!recipeTestAbort && Date.now() < dwellDeadline)
-        {
-            await sleep(Math.min(50, dwellDeadline - Date.now()));
-        }
-    }
 }
 
 
-async function moveRecipeTestPoint(recipe, point, label)
+async function moveRecipeTestPoint(recipe, point, label, laserDurationMs)
 {
     selectedPointId =
         point.id;
@@ -1946,6 +1932,9 @@ async function moveRecipeTestPoint(recipe, point, label)
 
     setRecipeTestStatus(label + ' · ' + pointLabel(point));
 
+    const off = await cmd('laser.off', {}, true);
+    if (off.laser_on !== false) throw Error('레이저 OFF를 확인하지 못했습니다.');
+    if (recipeTestAbort) return;
 
     const result = await cmd(
         'point.goto',
@@ -1955,13 +1944,33 @@ async function moveRecipeTestPoint(recipe, point, label)
                 recipe.id,
 
             point_id:
-                point.id
+                point.id,
+            laser_after_move: false
         }
     );
 
 
     if (!result.motion_id) throw Error('포인트 이동 ID를 받지 못했습니다.');
-    await waitForRecipeMotion(point, result.motion_id);
+    await waitForRecipeMotion(result.motion_id);
+    if (recipeTestAbort) return;
+
+    try
+    {
+        // 서버 타이머로 브라우저 연결이 끊겨도 조사 시간이 지나면 소등한다.
+        const laser = await cmd('laser.pulse', {duration_ms: laserDurationMs}, true);
+        if (laser.laser_on !== true) throw Error('레이저 ON을 확인하지 못했습니다.');
+        setRecipeTestStatus(label + ' · ' + pointLabel(point) + ` · 레이저 ON ${laserDurationMs} ms`);
+        const deadline = Date.now() + laserDurationMs;
+        while (!recipeTestAbort && Date.now() < deadline)
+        {
+            await sleep(Math.min(50, deadline - Date.now()));
+        }
+    }
+    finally
+    {
+        const stopped = await cmd('laser.off', {}, true);
+        if (stopped.laser_on !== false) throw Error('레이저 OFF를 확인하지 못했습니다.');
+    }
 }
 
 
@@ -2003,6 +2012,12 @@ async function runRecipePointTest(mode)
         );
     }
 
+    const laserDurationMs = Number($('recipeTestLaserMs').value);
+    if (!Number.isInteger(laserDurationMs) || laserDurationMs < 50 || laserDurationMs > 60000)
+    {
+        throw Error('조사 시간은 50~60000 ms 범위의 정수로 입력하세요.');
+    }
+
     if (recipe.product_rotation_deg || recipe.product_tilt_deg)
     {
         await cmd('recipe.pose_preview', {recipe_id: recipe.id}, true);
@@ -2038,7 +2053,8 @@ async function runRecipePointTest(mode)
                 await moveRecipeTestPoint(
                     recipe,
                     points[index],
-                    `순차 ${index + 1}/${points.length}`
+                    `순차 ${index + 1}/${points.length}`,
+                    laserDurationMs
                 );
             }
         }
@@ -2078,7 +2094,8 @@ async function runRecipePointTest(mode)
                 await moveRecipeTestPoint(
                     recipe,
                     points[index],
-                    `랜덤 ${count}`
+                    `랜덤 ${count}`,
+                    laserDurationMs
                 );
             }
         }

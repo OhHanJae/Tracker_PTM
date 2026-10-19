@@ -88,7 +88,7 @@
                 <div class="recipe-actions"><select id="recipeSelect" aria-label="레시피"></select><button id="manageRecipes" type="button">레시피 관리</button><button id="exportRecipe" type="button">파일 내보내기</button><button id="importRecipe"
                     type="button">파일 불러오기</button><input id="recipeFile" type="file" accept="application/json,.json"
                     hidden></div>
-                <div class="recipe-actions recipe-test-actions"><button id="runRecipeSequence" type="button">1번부터 순차 테스트</button><button
+                <div class="recipe-actions recipe-test-actions"><label>조사 시간 ms<input id="recipeTestLaserMs" type="number" min="50" max="60000" step="50" value="1000" style="width:90px"></label><button id="runRecipeSequence" type="button">1번부터 순차 테스트</button><button
                     id="runRecipeRandom" type="button">랜덤 반복 시작</button><button id="stopRecipeTest" type="button"
                     class="danger" disabled>테스트 정지</button><output id="recipeTestStatus">대기</output></div>
             </div>
