@@ -193,6 +193,9 @@ class HeadlessController:
         }
         self._power_saving = False
         self._laser_plc_mode = 1
+        self._laser_applied_mode = 1
+        self.laser_control_priority = False
+        self._laser_core_policy: dict[str, Any] = {"enabled": False}
         self._laser_manual_deadline = 0.0
         self._laser_manual_allowed = True
         self._laser_manual_block_reason = ""
@@ -373,6 +376,8 @@ class HeadlessController:
             self._laser_backend = laser_settings["backend"]
         if isinstance(laser_settings, dict) and isinstance(laser_settings.get("bypass"), bool):
             self.laser_bypass = laser_settings["bypass"]
+        if isinstance(laser_settings, dict) and isinstance(laser_settings.get("control_priority"), bool):
+            self.laser_control_priority = laser_settings["control_priority"]
         if isinstance(laser_settings, dict) and "state_profiles" in laser_settings:
             try:
                 self.laser_state_profiles = self._validated_laser_profiles(laser_settings["state_profiles"])
@@ -434,6 +439,7 @@ class HeadlessController:
             "version": 1,
             "device": dict(self.device_settings),
             "laser": {"bypass": self.laser_bypass, "backend": self._laser_backend,
+                      "control_priority": self.laser_control_priority,
                       "state_profiles": deepcopy(self.laser_state_profiles),
                       "numbering": "BOARD", "pin": 31, "active_high": True},
             "serial": {
@@ -559,8 +565,11 @@ class HeadlessController:
             result[state] = {"mode": profile["mode"], "interval_ms": interval}
         return result
 
+    def _effective_laser_mode(self) -> int:
+        return 1 if self.laser_control_priority else self._laser_plc_mode
+
     def _apply_laser_state(self, state: str, *, manual: bool = False, profile: dict[str, Any] | None = None) -> dict[str, Any]:
-        if self._laser_plc_mode != 1 and state != "plc_override":
+        if self._effective_laser_mode() != 1 and state != "plc_override":
             return {"accepted": False, "reason": "PLC laser mode has priority"}
         if state not in self.laser_state_profiles and (state != "plc_override" or profile is None):
             raise HeadlessApiError("INVALID_PARAMS", "unknown laser state")
@@ -887,7 +896,7 @@ class HeadlessController:
 
     def _laser_write_coil(self, enabled: bool, *, pattern_step: bool = False) -> dict[str, Any]:
         """Write the owned GPIO output, or the explicitly configured legacy relay."""
-        if enabled and self._laser_plc_mode not in {1, 2, 3, 4, 5}:
+        if enabled and self._effective_laser_mode() not in {1, 2, 3, 4, 5}:
             raise HeadlessApiError("LASER_INTERLOCK", "PLC laser mode forces output OFF")
         state_permitted = pattern_step and self._laser_state_allowed and (
             not self._laser_automatic_off or self._laser_active_state == "work_complete")
@@ -1060,6 +1069,7 @@ class HeadlessController:
                 },
                 "laser": {
                     "plc_mode": self._laser_plc_mode,
+                    "control_priority": self.laser_control_priority,
                     "state_profiles": deepcopy(self.laser_state_profiles),
                     "active_state": self._laser_active_state,
                     "active_profile": dict(self._laser_active_profile) if self._laser_active_state else None,
@@ -1479,21 +1489,33 @@ class HeadlessController:
                 enabled = self._bool(params, "enabled")
                 automatic_off = self._bool(params, "automatic_off", False)
                 allowed = self._bool(params, "manual_allowed", self._laser_manual_allowed)
-                if plc_mode != self._laser_plc_mode:
+                state_allowed = self._bool(params, "state_allowed", allowed)
+                local_allowed = self._bool(params, "local_allowed", True)
+                self._laser_core_policy = {**params, "plc_mode": plc_mode, "enabled": enabled,
+                                           "automatic_off": automatic_off, "manual_allowed": allowed,
+                                           "state_allowed": state_allowed}
+                mode = 1 if self.laser_control_priority else plc_mode
+                if self.laser_control_priority:
+                    enabled = False
+                    automatic_off = not local_allowed
+                    allowed = state_allowed = local_allowed
+                if mode != self._laser_applied_mode:
                     self._laser_write_coil(False)
                     self._laser_deadline = 0.0
-                    self._laser_plc_mode = plc_mode
-                if plc_mode not in {1, 2, 3, 4, 5}:
+                    self._laser_applied_mode = mode
+                self._laser_plc_mode = plc_mode
+                if mode not in {1, 2, 3, 4, 5}:
                     allowed = False
                     automatic_off = True
                 self._power_saving = enabled
                 self._laser_automatic_off = automatic_off
                 self._laser_manual_allowed = allowed
                 self._laser_manual_block_reason = (
-                    "" if allowed else str(params.get("manual_block_reason") or "Core가 레이저 출력을 허용하지 않았습니다.")
+                    "" if allowed else str(params.get("local_block_reason" if self.laser_control_priority else "manual_block_reason")
+                                           or "Core가 레이저 출력을 허용하지 않았습니다.")
                 )
-                self._laser_state_allowed = self._bool(params, "state_allowed", allowed)
-                if plc_mode not in {1, 2, 3, 4, 5}:
+                self._laser_state_allowed = state_allowed
+                if mode not in {1, 2, 3, 4, 5}:
                     self._laser_state_allowed = False
                 preserve_manual = bool(self._laser_manual_deadline and allowed)
                 preserve_state = bool(self._laser_active_state and self._laser_state_allowed
@@ -1505,10 +1527,10 @@ class HeadlessController:
                     except HeadlessApiError:
                         self._laser_deadline = time.monotonic() + 0.2
                         raise
-                if plc_mode in {2, 3, 4, 5} and self._laser_state_allowed and not enabled and not automatic_off:
+                if mode in {2, 3, 4, 5} and self._laser_state_allowed and not enabled and not automatic_off:
                     self._apply_laser_state("plc_override", profile={
-                        "mode": "on" if plc_mode == 2 else "blink",
-                        "interval_ms": {2: 500, 3: 500, 4: 250, 5: 100}[plc_mode],
+                        "mode": "on" if mode == 2 else "blink",
+                        "interval_ms": {2: 500, 3: 500, 4: 250, 5: 100}[mode],
                     })
                 return {"sleeping": enabled, "laser_on": self.laser_on, "plc_mode": plc_mode,
                         "manual_override": preserve_manual, "manual_allowed": allowed}
@@ -1629,7 +1651,7 @@ class HeadlessController:
                                    or (command == "motion.stop" and params.get("preserve_laser_manual") is True))
                 preserve_manual = preserve_manual and bool(self._laser_manual_deadline)
                 preserve_manual |= (command == "motion.stop" and params.get("preserve_laser") is True)
-                preserve_manual |= (self._laser_plc_mode in {2, 3, 4, 5} and self._laser_state_allowed
+                preserve_manual |= (self._effective_laser_mode() in {2, 3, 4, 5} and self._laser_state_allowed
                                     and command in {"motion.jog", "motion.absolute", "motion.relative",
                                                     "motion.goto", "point.goto", "home.start", "motion.stop"})
                 preserve_manual |= (command == "motion.stop" and "jog_token" in params
@@ -1690,7 +1712,7 @@ class HeadlessController:
                                   and (self._laser_backend == "gpio" or self.laser_connected))
                     if "laser_permit_token" in params:
                         auto_laser = auto_laser and params["laser_permit_token"] == self._laser_generation
-                    if (not self._laser_manual_deadline and self._laser_plc_mode not in {2, 3, 4, 5} and not self.laser_bypass
+                    if (not self._laser_manual_deadline and self._effective_laser_mode() not in {2, 3, 4, 5} and not self.laser_bypass
                             and (self._laser_backend == "gpio" or self.laser_connected)):
                         self._laser_write_coil(False)
                     laser_generation = self._laser_generation
@@ -1989,6 +2011,7 @@ class HeadlessController:
             return {"protocol": PROTOCOL_NAME, "version": PROTOCOL_VERSION, "time": time.time()}
         if command == "laser.settings":
             enabled = self._bool(params, "bypass", self.laser_bypass)
+            priority = self._bool(params, "control_priority", self.laser_control_priority)
             profiles = self._validated_laser_profiles(params["state_profiles"]) if "state_profiles" in params else self.laser_state_profiles
             with self._laser_lock:
                 if enabled:
@@ -2002,18 +2025,24 @@ class HeadlessController:
                     self.laser_on = False
                     self._laser_deadline = 0.0
                 previous = self.laser_bypass
+                previous_priority = self.laser_control_priority
                 previous_profiles = self.laser_state_profiles
                 self.laser_bypass = enabled
+                self.laser_control_priority = priority
                 self.laser_state_profiles = profiles
                 try:
                     self._save_settings()
                 except OSError:
                     self.laser_bypass = previous
+                    self.laser_control_priority = previous_priority
                     self.laser_state_profiles = previous_profiles
                     raise
                 if profiles != previous_profiles and self._laser_active_state:
                     self._laser_write_coil(False)
+                if priority != previous_priority:
+                    self.command("laser.power_save", self._laser_core_policy)
                 return {"bypass": self.laser_bypass, "laser_on": self.laser_on,
+                        "control_priority": self.laser_control_priority,
                         "state_profiles": deepcopy(self.laser_state_profiles)}
         if command == "system.status":
             return self.status()

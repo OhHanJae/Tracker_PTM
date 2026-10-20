@@ -259,7 +259,7 @@ COMMAND_TEMPLATES: dict[str, dict[str, Any]] = {
     "laser.off": {},
     "laser.pulse": {"duration_ms": 500},
     "laser.state": {"state": "point_irradiation", "manual": False},
-    "laser.settings": {"bypass": False},
+    "laser.settings": {"bypass": False, "control_priority": False},
     "device.query": {"type": "pan"},
     "maintenance.self_check": {"confirm": True},
     "maintenance.restart": {"confirm": True},

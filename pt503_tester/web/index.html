@@ -237,7 +237,8 @@
         </section>
         <section id="laser" class="page" hidden>
             <h2>레이저 모듈</h2><output id="laserState">GPIO 명령 미확인</output>
-            <div class="fields"><label><input id="laserBypass" type="checkbox">레이저 바이패스</label><button id="saveLaserSettings">레이저 설정 저장</button><output id="laserBypassState">사용</output></div>
+            <div class="fields"><label><input id="laserBypass" type="checkbox">레이저 바이패스</label><label><input id="laserControlPriority" type="checkbox">제어 우선권 사용</label><button id="saveLaserSettings">레이저 설정 저장</button><output id="laserBypassState">사용</output></div>
+            <p>제어 우선권 사용 시 PLC 레이저 모드와 관계없이 PTM 수동·자동 제어를 사용합니다. 체크 상태는 즉시 저장됩니다.</p>
             <p>바이패스에서는 레이저 출력을 차단합니다. 설정은 서버 재시작 후에도 유지됩니다.</p>
             <p>RDK X5 물리 핀 31 · HIGH=ON / LOW=OFF. 포인트 이동 중 OFF, 실제 완료 후 허가된 출력만 ON.</p>
             <p>표시는 마지막 GPIO 명령 상태입니다. 레이저 출력 검출 기능은 없습니다.</p>

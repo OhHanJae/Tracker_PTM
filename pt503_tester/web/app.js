@@ -1029,10 +1029,17 @@ async function saveLaserSettings()
         profiles[row.dataset.state] = {mode: row.querySelector('select').value, interval_ms: interval};
     }
     await cmd('laser.settings', {bypass: $('laserBypass').checked,
+        control_priority: $('laserControlPriority').checked,
         ...(Object.keys(profiles).length ? {state_profiles: profiles} : {})});
     laserSettingsDirty = false;
 }
 $('laserBypass').oninput = () => { laserSettingsDirty = true; };
+$('laserControlPriority').onchange = guarded(async () => {
+    const checkbox = $('laserControlPriority');
+    checkbox.disabled = true;
+    try { await cmd('laser.settings', {control_priority: checkbox.checked}); }
+    finally { checkbox.disabled = false; }
+});
 $('saveLaserSettings').onclick = guarded(saveLaserSettings);
 
 let ptmSettingsDirty = false;
@@ -1486,6 +1493,10 @@ async function refreshOnce()
                     if (!laserSettingsDirty)
                     {
                         $('laserBypass').checked = Boolean(status.laser.bypass);
+                    }
+                    if (!$('laserControlPriority').disabled)
+                    {
+                        $('laserControlPriority').checked = Boolean(status.laser.control_priority);
                     }
                     $('laserBypassState').textContent = status.laser.bypass ? '바이패스 / 출력 차단' : (status.laser.backend === 'gpio' ? 'GPIO BOARD 31' : 'RS485');
                     $('laserState').textContent = 'GPIO 명령: ' +
