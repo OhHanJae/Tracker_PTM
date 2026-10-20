@@ -141,14 +141,20 @@ document.querySelectorAll('[data-cad-view]').forEach(button => {
     button.addEventListener('click', () => state.viewer?.setPreset(button.dataset.cadView));
 });
 
-for (const id of ['cadLabels', 'drawingPointLabels'])
+for (const [ids, className] of [
+    [['cadLabels', 'drawingPointLabels'], 'show-labels'],
+    [['cadTargetLabels', 'drawingTargetLabels'], 'show-target-labels']
+])
 {
-    byId(id)?.addEventListener('change', event => {
-        const visible = event.target.checked;
-        for (const otherId of ['cadLabels', 'drawingPointLabels'])
-        {
-            if (byId(otherId)) byId(otherId).checked = visible;
-        }
-        byId('cadStage').classList.toggle('show-labels', visible);
-    });
+    for (const id of ids)
+    {
+        byId(id)?.addEventListener('change', event => {
+            const visible = event.target.checked;
+            for (const otherId of ids)
+            {
+                if (byId(otherId)) byId(otherId).checked = visible;
+            }
+            byId('cadStage').classList.toggle(className, visible);
+        });
+    }
 }

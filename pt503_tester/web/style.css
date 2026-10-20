@@ -346,7 +346,9 @@ body:has(#drawings:not([hidden])) > main { flex: 1; min-height: 0; width: 100%; 
 .cad-point.calibration-point { --cad-point: #f59e0b; }
 .cad-point.selected { width: 18px; min-height: 18px; height: 18px; background: #fff; }
 .cad-point.calibration-point.selected { background: #ffd28a; }
-.cad-stage.show-labels .cad-point::after { content: attr(data-label); position: absolute; left: 12px; top: -7px; white-space: nowrap; color: var(--cad-point,#fff); font: 11px/1.2 system-ui; background: #07111ad9; padding: 2px 4px; border-radius: 3px; }
+.cad-stage.show-labels .cad-point::after, .cad-stage.show-target-labels .cad-point::after { content: attr(data-label); position: absolute; left: 12px; top: -7px; white-space: nowrap; color: var(--cad-point,#fff); font: 11px/1.2 system-ui; background: #07111ad9; padding: 2px 4px; border-radius: 3px; }
+.cad-stage.show-target-labels .cad-point::after { content: attr(data-target-label); }
+.cad-stage.show-labels.show-target-labels .cad-point::after { content: attr(data-label) " / " attr(data-target-label); }
 .cad-warning { padding: 10px; color: #915a15; background: #fff6e8; border-left: 3px solid #f0a63c; }
 .recipe-dialog-form { display: grid; min-width: min(440px,80vw); gap: 14px; }
 .recipe-dialog-form label { display: grid; gap: 6px; }

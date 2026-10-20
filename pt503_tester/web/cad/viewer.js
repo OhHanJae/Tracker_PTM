@@ -229,8 +229,9 @@ export async function createStandaloneViewer({
             {
                 marker.classList.add('calibration-point');
             }
-            marker.dataset.label = point.target_id;
-            marker.title = point.target_id;
+            marker.dataset.label = point.order ?? point.id;
+            marker.dataset.targetLabel = point.target_id;
+            marker.title = `포인트 ID: ${marker.dataset.label}\n타겟 ID: ${point.target_id}`;
             marker.addEventListener('click', event => {
                 event.stopPropagation();
                 if (event.detail === 0) select(point);

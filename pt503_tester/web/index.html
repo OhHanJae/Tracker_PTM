@@ -151,6 +151,7 @@
                         <button data-cad-view="left" type="button">좌</button><button data-cad-view="right" type="button">우</button>
                         <button data-cad-view="reset" type="button">초기화</button>
                         <label><input id="cadLabels" type="checkbox">포인트 ID 보이기</label>
+                        <label><input id="cadTargetLabels" type="checkbox">타겟 ID 표시</label>
                     </div>
                     <div id="cadStage" class="cad-stage"><canvas id="cadCanvas"></canvas><div id="cadPointLayer"></div></div>
                     <pre id="cadSelection">도면 포인트를 선택하세요.</pre>
@@ -159,7 +160,10 @@
                 <aside class="drawing-calibration-panel">
                     <div class="drawing-calibration-scroll">
                         <h2>도면 포인트 설정</h2>
-                        <label><input id="drawingPointLabels" type="checkbox">포인트 ID 보이기</label>
+                        <div class="toolbar">
+                            <label><input id="drawingPointLabels" type="checkbox">포인트 ID 보이기</label>
+                            <label><input id="drawingTargetLabels" type="checkbox">타겟 ID 표시</label>
+                        </div>
                         <div id="drawingPointSets" class="cad-groups"></div>
                         <div class="toolbar"><label>그룹 레시피<select id="drawingActiveRecipe" aria-label="그룹 레시피"></select></label><button id="newDrawingRecipe" type="button">새 레시피</button></div>
                         <p id="drawingWorkflowStatus" role="status"></p>
