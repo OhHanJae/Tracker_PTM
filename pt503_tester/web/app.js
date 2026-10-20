@@ -2040,6 +2040,12 @@ async function runRecipePointTest(mode)
 
     try
     {
+        const testStatus = await cmd('system.status', {}, true);
+        if (testStatus.laser?.manual_allowed === false)
+        {
+            throw Error('레이저 사용 차단: ' + (testStatus.laser.manual_block_reason
+                || 'Core의 현재 알람, 강제정지, 체결 후 재점등 제한을 확인하세요.'));
+        }
         if (
             mode === 'sequence'
         )

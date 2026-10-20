@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from pt503_tester.headless_server import HeadlessController
+from pt503_tester.headless_server import HeadlessApiError, HeadlessController
 from pt503_tester.recipe_store import RecipeStore
 
 
@@ -117,3 +117,21 @@ def test_manual_jog_still_cancels_automatic_laser_state(controller):
     control.command('motion.jog', {'pan': 'right', 'speed_level': 5})
     assert not control.laser_on
     assert control._laser_active_state is None
+
+
+def test_core_laser_block_reason_is_visible_and_does_not_bypass_interlock(controller):
+    control, output = controller
+    reason = 'PLC 강제정지(FORCE_STOP) 활성'
+    control.command('laser.power_save', {
+        'enabled': False, 'manual_allowed': False, 'manual_block_reason': reason,
+    })
+    assert control.status()['laser']['manual_block_reason'] == reason
+    output.write.reset_mock()
+    for command, params in [('laser.on', {}), ('laser.pulse', {'duration_ms': 100})]:
+        with pytest.raises(HeadlessApiError) as error:
+            control.command(command, params)
+        assert error.value.code == 'LASER_INTERLOCK'
+        assert reason in error.value.message
+    assert not any(call.args == (True,) for call in output.write.call_args_list)
+    control.command('laser.power_save', {'enabled': False, 'manual_allowed': True})
+    assert control.status()['laser']['manual_block_reason'] == ''
