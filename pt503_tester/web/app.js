@@ -2230,6 +2230,31 @@ function editPoint(point)
 }
 
 
+function formatRecipeNumber(value)
+{
+    if ((typeof value !== 'number' && typeof value !== 'string') || String(value).trim() === '') return '—';
+    const number = Number(value);
+    return Number.isFinite(number) ? number.toFixed(3) : '—';
+}
+
+function formatRecipeNote(note)
+{
+    const text = String(note || '');
+    if (!text.startsWith('CAD_TARGET ')) return text;
+    const lines = text.replace(/^(CAD_TARGET [^\r\n]*?)(도면 )/, '$1\n$2').split(/\r?\n/);
+    const coordinates = lines[1]?.match(/^도면 .* \/ X=([+-]?\d+(?:\.\d+)?), Y=([+-]?\d+(?:\.\d+)?), Z=([+-]?\d+(?:\.\d+)?) \/ contact-Z (?:인증|미인증)$/);
+    if (!coordinates) return text;
+    return [`X ${formatRecipeNumber(coordinates[1])} · Y ${formatRecipeNumber(coordinates[2])} · Z ${formatRecipeNumber(coordinates[3])}`,
+        ...lines.slice(2)].join('\n');
+}
+
+function estimatePointMoveSeconds(previous, point)
+{
+    if (!previous || ![previous.pan, previous.tilt, point.pan, point.tilt].every(Number.isFinite)) return null;
+    const pan = Math.abs(point.pan - previous.pan) % 360;
+    return Math.max(Math.min(pan, 360 - pan) / 30, Math.abs(point.tilt - previous.tilt) / 15);
+}
+
 function renderPoints()
 {
     const recipe =
@@ -2252,7 +2277,7 @@ function renderPoints()
     $('points').replaceChildren(
 
         ...(recipe?.points || [])
-            .map(point => {
+            .map((point, index, points) => {
 
                 const tr =
                     document.createElement(
@@ -2287,6 +2312,8 @@ function renderPoints()
                 );
 
 
+                const estimate = recipeEstimates.get(point.id);
+                const moveSeconds = estimatePointMoveSeconds(points[index - 1], point);
                 const values = [
 
                     point.order,
@@ -2297,20 +2324,16 @@ function renderPoints()
 
                     point.tilt,
 
-                    (() => {
-                        const estimate = recipeEstimates.get(point.id);
-                        if (!estimate)
-                        {
-                            return `추정 X/Y/Z 미확정: ${recipeEstimateStatus}`;
-                        }
-                        return `추정 X ${Number(estimate.x).toFixed(3)} / Y ${Number(estimate.y).toFixed(3)} ${estimate.units} (${estimate.coordinate_frame})\nZ 미확정: ${estimate.z_reason}`;
-                    })(),
+                    formatRecipeNumber(estimate?.x),
+                    formatRecipeNumber(estimate?.y),
+                    formatRecipeNumber(estimate?.z),
+                    moveSeconds === null ? '—' : moveSeconds.toFixed(2),
 
                     point.enabled
                         ? 'ON'
                         : 'OFF',
 
-                    point.note
+                    formatRecipeNote(point.note)
                 ];
 
 
@@ -2329,10 +2352,15 @@ function renderPoints()
                         value;
 
 
-                    if (valueIndex === 4)
+                    if (valueIndex >= 4 && valueIndex <= 6)
                     {
                         td.className = 'estimated-coordinate';
+                        td.title = !estimate ? recipeEstimateStatus
+                            : valueIndex === 6 && estimate.z == null ? 'Z 추정값 미확정'
+                            : estimate.units || '';
                     }
+                    if (valueIndex === 7) td.className = 'estimated-move-time';
+                    if (valueIndex === 9) td.className = 'recipe-note';
 
 
                     tr.append(td);

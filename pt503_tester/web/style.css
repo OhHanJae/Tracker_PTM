@@ -323,8 +323,12 @@ body:has(#drawings:not([hidden])) > main { flex: 1; min-height: 0; width: 100%; 
 .drag-handle:active { cursor: grabbing; }
 .drawing-point-row.drop-target { box-shadow: inset 0 3px 0 var(--accent); }
 .drawing-point-row.dragging { opacity: .55; }
-.estimated-coordinate { min-width: 190px; color: #2165c5; font-size: 11px; line-height: 1.45; }
-.estimated-coordinate .unconfirmed { color: #b36b1f; }
+.recipe-point-table { min-width: 1050px; }
+.recipe-point-table th:nth-child(n+3):nth-child(-n+8), .recipe-point-table td:nth-child(n+3):nth-child(-n+8) { text-align: right; white-space: nowrap; }
+.estimated-coordinate { min-width: 74px; color: #2165c5; font-variant-numeric: tabular-nums; }
+.estimated-move-time { font-variant-numeric: tabular-nums; }
+.recipe-note { min-width: 220px; white-space: pre-line; overflow-wrap: anywhere; }
+.recipe-move-help { color: #687583; font-size: 12px; }
 .cad-layout { display: grid; grid-template-columns: minmax(280px,360px) minmax(0,1fr); gap: 18px; min-height: 650px; }
 .cad-panel { min-width: 0; overflow: auto; }
 #cadInfo { display: block; white-space: pre-wrap; color: #445565; line-height: 1.5; }
