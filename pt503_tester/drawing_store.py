@@ -561,7 +561,7 @@ class DrawingStore:
         if product_manifests:
             if len(product_manifests) != 1:
                 raise ValueError("제품이 여러 개 들어 있습니다. 제품별 ZIP으로 등록하세요.")
-            drawing = self._create_fvp_package(data, dict(files), product_manifests[0][0], create_recipes=state is None)
+            drawing = self._create_fvp_package(data, dict(files), product_manifests[0][0])
         else:
             if any(Path(name).name != name for name, _ in files):
                 raise ValueError("drawing backup requires flat asset filenames")
@@ -574,8 +574,7 @@ class DrawingStore:
             raise
         return self.get_drawing(drawing["id"])
 
-    def _create_fvp_package(self, data: bytes, files: dict[str, bytes], manifest_name: str,
-                            *, create_recipes: bool) -> dict[str, Any]:
+    def _create_fvp_package(self, data: bytes, files: dict[str, bytes], manifest_name: str) -> dict[str, Any]:
         source = json.loads(files[manifest_name].decode("utf-8-sig"))
         if source.get("coordinate_units") != "mm" or source.get("model_units") != "cm":
             raise ValueError("FVP 제품 좌표는 mm, 모델 단위는 cm여야 합니다.")
@@ -611,19 +610,6 @@ class DrawingStore:
             original.write_bytes(data)
             record["fvp_archive_path"] = str(original)
             record["name"] = str(source.get("name") or product_id)
-            if create_recipes and self.recipe_store is not None:
-                document = {"schema": "pt503.recipe.bundle", "version": 1, "recipes": []}
-                for item in source.get("recipes", []):
-                    group_ids = {int(point["group_id"]) for point in item.get("points", [])}
-                    if len(group_ids) != 1:
-                        raise ValueError("FVP 레시피는 하나의 그룹에 속해야 합니다.")
-                    point_file = f"group_{next(iter(group_ids))}.json"
-                    targets = {str(point.get("target_id") or point.get("source_cad_target_id") or point.get("name") or point["point_id"]) for point in item["points"]}
-                    points = [deepcopy(point) for point in record["points_by_file"][point_file]
-                              if point["target_id"] in targets]
-                    document["recipes"].append({"id": str(uuid.uuid4()), "name": str(item.get("name") or "Recipe"),
-                                                "points": [], "drawing": self._new_recipe_state(record, point_file, points)})
-                self.recipe_store.import_document(document)
             self.save()
         except Exception:
             self.delete_drawing(drawing["id"])

@@ -41,8 +41,30 @@ def stores(tmp_path):
     recipes = RecipeStore(tmp_path / "recipes.json")
     drawings = DrawingStore(tmp_path / "drawings", recipe_store=recipes)
     drawing = drawings.create_from_uploads([("fvp.zip", fvp_archive()[0])])
-    group_recipes = [recipe for recipe in recipes._recipes if recipe.drawing]
+    group_recipes = []
+    for group in drawing["point_sets"]:
+        drawings.select_point_set(drawing["id"], group["file"])
+        recipe = recipes.upsert_recipe(name=group["name"])
+        drawings.select_recipe(drawing["id"], recipe.id)
+        group_recipes.append(recipe)
+    drawings.select_point_set(drawing["id"], drawing["selected_point_file"])
     return drawings, recipes, drawing["id"], group_recipes
+
+
+@pytest.mark.parametrize("existing_recipe", [False, True])
+def test_fvp_upload_does_not_create_or_change_recipes(tmp_path, existing_recipe):
+    recipes = RecipeStore(tmp_path / "recipes.json")
+    if existing_recipe:
+        recipes.upsert_recipe(name="Existing recipe")
+    before = recipes.export_document()
+    saved = recipes.path.read_bytes() if recipes.path.exists() else None
+    drawings = DrawingStore(tmp_path / "drawings", recipe_store=recipes)
+    for _ in range(2):
+        drawing = drawings.create_from_uploads([("fvp.zip", fvp_archive()[0])])
+        assert [group["point_count"] for group in drawing["point_sets"]] == [5, 5, 5]
+        assert drawing["selected_recipe_id"] == ""
+        assert recipes.export_document() == before
+        assert (recipes.path.read_bytes() if recipes.path.exists() else None) == saved
 
 
 def teach(drawings, drawing_id, offset=0):
@@ -280,7 +302,13 @@ def test_http_zip_upload_recipe_selection_and_download(tmp_path):
             with urlopen(request, timeout=5) as response:
                 drawing = json.load(response)["result"]["drawing"]
             assert len(drawing["point_sets"]) == 3
+            assert not [recipe for recipe in recipes._recipes if recipe.drawing]
+            for group in drawing["point_sets"]:
+                recipe = command("recipe.upsert", {"name": group["name"]})["recipe"]
+                command("drawing.select_point_set", {"drawing_id": drawing["id"], "point_file": group["file"]})
+                command("drawing.select_recipe", {"drawing_id": drawing["id"], "recipe_id": recipe["id"]})
             linked = [recipe for recipe in recipes._recipes if recipe.drawing]
+            command("drawing.select_point_set", {"drawing_id": drawing["id"], "point_file": drawing["selected_point_file"]})
             chosen = command("drawing.select_recipe", {"drawing_id": drawing["id"], "recipe_id": linked[0].id})["drawing"]
             assert chosen["selected_recipe_id"] == linked[0].id
             with pytest.raises(HTTPError) as error:

@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../pt503_tester/web/app.js'), 'utf8');
+const recipeLoading = source.slice(source.indexOf('async function loadRecipes(select)'), source.indexOf('function selected()'));
 const workflow = source.slice(source.indexOf('function compatibleDrawingRecipes()'), source.indexOf('function renderDrawingPointSets()'));
 const moveControls = source.slice(source.indexOf('function updateDrawingMoveControls()'), source.indexOf('async function moveSelectedDrawingPoint()'));
 const calibrationButton = source.slice(source.indexOf('function updateDrawingCalibrationButton()'), source.indexOf('async function toggleCalibrationDrawingPoint()'));
@@ -84,5 +85,37 @@ function runtime() {
     assert.equal(ctx.$('applyCurrentDrawingPoint').disabled, true);
     assert.equal(ctx.$('moveDrawingPoint').disabled, true);
 
-    console.log('PASS: server compatibility, button state, failed recipe selection, pose teaching and point selection');
+    ctx = runtime();
+    ctx.renderPoints = () => {};
+    let listedRecipes = [{id: 'recipe', name: 'renamed'}, {id: 'other', name: 'other'}];
+    ctx.cmd = async command => {
+        assert.equal(command, 'recipe.list');
+        return {recipes: listedRecipes};
+    };
+    vm.runInContext(recipeLoading, ctx);
+    await ctx.loadRecipes('recipe');
+    assert.equal(ctx.$('drawingActiveRecipe').value, 'recipe', 'rename preserves drawing selection');
+    assert.equal(ctx.$('drawingActiveRecipe').children[1].text, 'renamed', 'rename refreshes drawing options');
+
+    listedRecipes = [...listedRecipes, {id: 'new', name: 'new'},
+        {id: 'unrelated', name: 'unrelated', drawing: {product_id: 'product', point_file: 'different.json'}}];
+    await ctx.loadRecipes('new');
+    assert.deepEqual(Array.from(ctx.$('drawingActiveRecipe').children, option => option.value),
+        ['', 'recipe', 'other', 'new'], 'new recipes appear while another group stays filtered out');
+    assert.equal(ctx.$('drawingActiveRecipe').value, 'recipe', 'editing another recipe preserves drawing selection');
+
+    listedRecipes = listedRecipes.filter(recipe => recipe.id !== 'recipe');
+    await ctx.loadRecipes();
+    assert.equal(ctx.activeDrawing.selected_recipe_id, '', 'deleted drawing recipe is cleared');
+    assert.equal(ctx.$('drawingActiveRecipe').value, '');
+    assert.deepEqual(Array.from(ctx.$('drawingActiveRecipe').children, option => option.value), ['', 'other', 'new']);
+    for (const id of ['applyCurrentDrawingPoint', 'calibrateDrawing', 'exportDrawingRecipe', 'moveDrawingPoint']) {
+        assert.equal(ctx.$(id).disabled, true, `${id} is disabled after deleting the selected recipe`);
+    }
+
+    ctx.activeDrawing = null;
+    await ctx.loadRecipes();
+    assert.equal(ctx.$('drawingActiveRecipe').disabled, true, 'recipe refresh also works before loading a drawing');
+
+    console.log('PASS: server compatibility, button state, recipe refresh, failed recipe selection, pose teaching and point selection');
 })().catch(error => {console.error(error); process.exitCode = 1;});

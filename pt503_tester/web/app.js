@@ -1680,6 +1680,12 @@ async function loadRecipes(select)
 
 
     renderPoints();
+    if (activeDrawing?.selected_recipe_id &&
+        !recipes.some(recipe => recipe.id === activeDrawing.selected_recipe_id))
+    {
+        activeDrawing.selected_recipe_id = '';
+    }
+    renderDrawingRecipeSelector();
 }
 
 
