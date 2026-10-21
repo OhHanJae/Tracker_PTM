@@ -10,7 +10,7 @@
 
 <body>
     <header>
-        <h1>BIT-PT503 / PT510</h1><span id="connection">연결 안 됨</span><button id="stopAll" class="danger">■ STOP</button>
+        <h1>BIT-PT503 / PT510</h1><span id="connection" role="status" aria-live="polite">연결 안 됨</span><button id="stopAll" class="danger">■ STOP</button>
     </header>
     <nav id="tabs"></nav>
     <div id="notice" role="status" aria-live="polite"></div>
@@ -237,10 +237,10 @@
                     type="button">감지</button><button id="padConnect" type="button">연결</button><button id="padDisconnect"
                     type="button">해제</button></div><output id="padStatus">대기</output><label><input id="padEnable"
                     type="checkbox">게임패드 조작 허용</label>
-            <div class="fields"><label>Pan 축<input id="padX" type="number" min="0" max="15"
-                        value="2"></label><label>Tilt 축<input id="padY" type="number" min="0" max="15"
-                        value="5"></label><label><input id="padInvertX" type="checkbox">Pan 반전</label><label><input
-                        id="padInvertY" type="checkbox">Tilt 반전</label></div>
+            <p>감지된 패드는 자동 연결됩니다. 처음 감지되지 않으면 패드 버튼을 한 번 누르세요. 연결 후 스틱을 중앙에 놓으면 조작할 수 있습니다.</p>
+            <div class="fields"><label>Pan 축<select id="padX"></select></label><label>Tilt 축<select id="padY"></select></label><label id="padPovField">방향키 축<select id="padPov"></select></label><button id="padMappingReset" type="button">기본 매핑 복원</button></div>
+            <p>모든 버튼·방향키의 기능과 이동 축을 직접 지정할 수 있습니다. 매핑은 이 브라우저에 패드별로 자동 저장됩니다. 이동 기능은 누르는 동안 동작합니다.</p>
+            <div class="table-scroll"><table><thead><tr><th>입력</th><th>현재 값</th><th>동작</th></tr></thead><tbody id="padMappings"></tbody></table></div>
             <pre id="padValues"></pre>
         </section>
         <section id="laser" class="page" hidden>

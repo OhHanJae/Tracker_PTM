@@ -78,6 +78,11 @@ h2:first-child { margin-top: 0; }
     background: var(--red);
     box-shadow: 0 0 0 3px rgba(217, 75, 75, .11);
 }
+#connection.connected { color: #087a4d; background: var(--green-soft); }
+#connection.connected::before { background: var(--green); box-shadow: 0 0 0 3px rgba(20, 164, 111, .14); }
+#padMappings select { width: 100%; }
+#padMappings tr.pressed { background: var(--green-soft); }
+#padMappings td:nth-child(2) { font-variant-numeric: tabular-nums; }
 header .danger { margin-left: auto; }
 button, input, select, textarea { font: inherit; max-width: 100%; }
 input, select, textarea {

@@ -32,6 +32,32 @@ let selectedCommandName = '';
 const protocolGroupGuide = window.protocolGroupGuide || {};
 const protocolCommandGuide = window.protocolCommandGuide || {};
 
+// 레이저 전용 PTM 웹 메뉴. 주석을 해제하면 해당 분류를 다시 표시합니다.
+// 서버의 명령 구현과 API 계약은 그대로 유지합니다.
+const visibleProtocolGroups = new Set([
+    'alarm', 'device', 'drawing', 'echo', 'home', 'laser', 'maintenance',
+    'monitor', 'motion', 'motor', 'pelco', 'point', 'power_save', 'protocol',
+    'ptm', 'raw', 'recipe', 'serial', 'system', 'zero',
+    // 'camera',
+    // 'cruise',
+    // 'focus',
+    // 'lens',
+    // 'pattern',
+    // 'preset', // 자동 운전은 point.goto의 좌표 이동을 사용합니다.
+    // 'scan',
+    // 'zoom',
+    // 'magnification',
+    // 'screen',
+    // 'zone',
+    // 'aux',
+]);
+const hiddenProtocolCommands = new Set(['home.after', 'home.time', 'pelco.flip']);
+
+function visibleProtocolCommand(command)
+{
+    return visibleProtocolGroups.has(command.split('.')[0]) && !hiddenProtocolCommands.has(command);
+}
+
 
 // ============================================================================
 // Pan / Tilt Jog 상태
@@ -48,6 +74,11 @@ let jogStopBusy = false;
 
 let padIndex = null;
 let padConnected = false;
+let padAutoConnect = true;
+let padMapping = null;
+let padMappingKey = '';
+let padMappingSignature = '';
+let oldPadInputs = {};
 
 let padActive = false;
 let padCentered = false;
@@ -57,10 +88,6 @@ let padMissingSince = 0;
 // 강제정지 후에는 스틱을 중앙으로 한 번 복귀시켜야
 // 다시 움직일 수 있도록 하는 안전장치
 let padRequireCenter = true;
-
-let oldButtons = [];
-let oldAxes = [];
-let oldPov = 15;
 
 let selectedPointId = null;
 let recipeTestRunning = false;
@@ -171,7 +198,6 @@ const PAD_BUTTON = Object.freeze({
 
 const PAD_DEADZONE = 0.15;
 const PAD_CENTER_STOP_DELAY_MS = 200;
-const PAD_MISSING_STOP_DELAY_MS = 500;
 
 
 // ============================================================================
@@ -1047,12 +1073,11 @@ let ptmSettingsDirty = false;
 function renderPtmSettings(settings)
 {
     if (!settings) return;
-    for (const [key, settingId, gamepadId] of [
-        ['invert_pan', 'settingInvertPan', 'padInvertX'],
-        ['invert_tilt', 'settingInvertTilt', 'padInvertY']
+    for (const [key, settingId] of [
+        ['invert_pan', 'settingInvertPan'],
+        ['invert_tilt', 'settingInvertTilt']
     ])
     {
-        $(gamepadId).checked = Boolean(settings[key]);
         if (!ptmSettingsDirty) $(settingId).checked = Boolean(settings[key]);
     }
     if (!ptmSettingsDirty) $('settingPowerOnHome').value = settings.power_on_home === null ? '' : String(settings.power_on_home);
@@ -1233,24 +1258,6 @@ $('dialStop').onclick =
 // ============================================================================
 // 웹 수동 Pan/Tilt 버튼
 // ============================================================================
-
-for (const [key, gamepadId] of [
-    ['invert_pan', 'padInvertX'],
-    ['invert_tilt', 'padInvertY']
-])
-{
-    const gamepadInput = $(gamepadId);
-    gamepadInput.addEventListener('change', guarded(async () => {
-        try
-        {
-            status.settings = await cmd('ptm.settings', {[key]: gamepadInput.checked});
-        }
-        finally
-        {
-            renderPtmSettings(status.settings);
-        }
-    }));
-}
 
 document
     .querySelectorAll('[data-pan]')
@@ -1438,6 +1445,9 @@ async function refreshOnce()
                         '/api/status'
                     );
 
+                $('connection').classList.toggle('connected', Boolean(status.serial?.connected) &&
+                    !['communication_error', 'communication_timeout'].includes(status.motion?.state));
+
 
                 if (
                     status.serial.connected
@@ -1567,6 +1577,7 @@ async function refreshOnce()
 
             catch
             {
+                $('connection').classList.remove('connected');
                 $('connection').textContent =
                     '서버 연결 끊김';
 
@@ -3425,7 +3436,7 @@ async function openDrawingManager()
 }
 
 
-async function loadDrawing(id = activeDrawingId())
+async function loadDrawing(id = $('drawingSelect').value || activeDrawing?.id)
 {
     if (!id)
     {
@@ -6436,7 +6447,8 @@ const enumFields = {
 function selectCommands()
 {
     const filtered = commands.filter(command =>
-        !selectedCommandGroup || command.startsWith(selectedCommandGroup + '.')
+        visibleProtocolCommand(command) &&
+        (!selectedCommandGroup || command.startsWith(selectedCommandGroup + '.'))
     );
     if (!filtered.includes(selectedCommandName))
     {
@@ -6760,7 +6772,7 @@ async function loadCommands()
     const groups =
         [
             ...new Set(
-                commands.map(
+                commands.filter(visibleProtocolCommand).map(
                     command =>
                         command.split('.')[0]
                 )
@@ -6866,198 +6878,211 @@ $('exportLogs').onclick =
 // GAMEPAD 기본 함수
 // ============================================================================
 
+const padActions = {
+    none: '사용 안 함', stop: '강제 정지', goto: '선택 포인트 이동', home: '0°, 0° 이동',
+    laser: '레이저 ON/OFF', laser_on: '레이저 ON', laser_off: '레이저 OFF',
+    recipe_prev: '이전 레시피', recipe_next: '다음 레시피',
+    point_prev: '이전 포인트', point_next: '다음 포인트',
+    speed_down: '속도 감소', speed_up: '속도 증가',
+    pan_left: 'Pan 왼쪽 (누르는 동안)', pan_right: 'Pan 오른쪽 (누르는 동안)',
+    tilt_up: 'Tilt 위 (누르는 동안)', tilt_down: 'Tilt 아래 (누르는 동안)'
+};
+let padDisconnecting = false;
+
 function browserPads()
 {
-    return [
-        ...(
-            navigator.getGamepads?.()
-            || []
-        )
-    ].filter(Boolean);
+    return [...(navigator.getGamepads?.() || [])].filter(pad => pad && pad.connected !== false);
 }
-
 
 function selectedPad()
 {
-    if (
-        padIndex === null
-    )
-    {
-        return null;
-    }
-
-
-    return (
-        navigator.getGamepads?.()[
-            padIndex
-        ]
-        || null
-    );
+    return padIndex === null ? null : browserPads().find(pad => pad.index === padIndex) || null;
 }
 
+function defaultPadMapping(pad)
+{
+    const standard = pad.mapping === 'standard';
+    const buttons = {};
+    const defaults = standard
+        ? {0: 'goto', 1: 'stop', 2: 'home', 3: 'laser', 4: 'recipe_prev', 5: 'recipe_next',
+            6: 'point_prev', 7: 'point_next', 14: 'speed_down', 15: 'speed_up'}
+        : {[PAD_BUTTON.A]: 'goto', [PAD_BUTTON.B]: 'stop', [PAD_BUTTON.X]: 'home',
+            [PAD_BUTTON.Y]: 'laser', [PAD_BUTTON.LB]: 'recipe_prev', [PAD_BUTTON.RB]: 'recipe_next',
+            [PAD_BUTTON.LT]: 'point_prev', [PAD_BUTTON.RT]: 'point_next'};
+    pad.buttons.forEach((_, index) => { buttons['b' + index] = defaults[index] || 'none'; });
+    if (!standard) Object.assign(buttons, {p0: 'none', p2: 'speed_up', p4: 'none', p6: 'speed_down'});
+    return {pan: standard ? 2 : PAD_AXIS.RIGHT_X, tilt: standard ? 3 : PAD_AXIS.RIGHT_Y,
+        pov: standard ? -1 : PAD_AXIS.POV, buttons};
+}
+
+function loadPadMapping(pad)
+{
+    padMappingKey = 'ptm.gamepad.mapping.v1:' + pad.mapping + ':' + pad.id;
+    padMapping = defaultPadMapping(pad);
+    try
+    {
+        const saved = JSON.parse(localStorage.getItem(padMappingKey) || 'null');
+        if (saved && typeof saved === 'object')
+        {
+            for (const key of ['pan', 'tilt', 'pov'])
+            {
+                if (Number.isInteger(saved[key]) && saved[key] >= -1 && saved[key] < pad.axes.length)
+                    padMapping[key] = saved[key];
+            }
+            for (const key of Object.keys(padMapping.buttons))
+            {
+                if (Object.hasOwn(padActions, saved.buttons?.[key])) padMapping.buttons[key] = saved.buttons[key];
+            }
+        }
+    }
+    catch { /* 저장값이 없거나 손상되면 기본 매핑을 사용합니다. */ }
+    padMappingSignature = '';
+    renderPadMapping(pad);
+}
+
+function savePadMapping()
+{
+    try
+    {
+        localStorage.setItem(padMappingKey, JSON.stringify(padMapping));
+        $('padStatus').textContent = '게임패드 매핑 저장됨';
+    }
+    catch { $('padStatus').textContent = '브라우저 저장 불가 / 현재 연결에 매핑 적용됨'; }
+}
+
+function padInputLabel(pad, key)
+{
+    if (key.startsWith('p')) return '방향키 ' + ({p0: '위', p2: '오른쪽', p4: '아래', p6: '왼쪽'})[key];
+    const index = Number(key.slice(1));
+    const labels = pad.mapping === 'standard'
+        ? ['A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'BACK', 'START', 'L3', 'R3', '방향키 위', '방향키 아래', '방향키 왼쪽', '방향키 오른쪽', 'HOME']
+        : ['Y', 'B', 'A', 'X', 'LB', 'RB', 'LT', 'RT', 'BACK', 'START', 'L3', 'R3'];
+    return `버튼 ${index}${labels[index] ? ' / ' + labels[index] : ''}`;
+}
+
+function renderPadMapping(pad)
+{
+    const signature = `${pad.buttons.length}/${pad.axes.length}`;
+    if (padMappingSignature === signature) return;
+    padMappingSignature = signature;
+    const defaults = defaultPadMapping(pad);
+    padMapping.buttons = Object.fromEntries(Object.entries(defaults.buttons).map(([key, value]) =>
+        [key, padMapping.buttons[key] || value]));
+    for (const [id, key] of [['padX', 'pan'], ['padY', 'tilt'], ['padPov', 'pov']])
+    {
+        $(id).replaceChildren(new Option('사용 안 함', -1),
+            ...pad.axes.map((_, index) => new Option('Axis ' + index, index)));
+        $(id).value = String(padMapping[key] < pad.axes.length ? padMapping[key] : -1);
+        padMapping[key] = Number($(id).value);
+        $(id).onchange = guarded(async () => {
+            const value = Number($(id).value);
+            const mapping = padMapping;
+            await stopJog(true);
+            if (mapping !== padMapping) return;
+            padMapping[key] = value;
+            oldPadInputs = readPadInputs(pad).inputs;
+            savePadMapping();
+        });
+    }
+    $('padPovField').hidden = pad.mapping === 'standard';
+    $('padMappings').replaceChildren(...Object.keys(padMapping.buttons).map(key => {
+        const row = document.createElement('tr');
+        row.dataset.input = key;
+        const label = document.createElement('td');
+        label.textContent = padInputLabel(pad, key);
+        const value = document.createElement('td');
+        value.textContent = '0.00';
+        const field = document.createElement('td');
+        const select = document.createElement('select');
+        select.setAttribute('aria-label', label.textContent + ' 동작');
+        select.replaceChildren(...Object.entries(padActions).map(([action, text]) => new Option(text, action)));
+        select.value = padMapping.buttons[key];
+        select.onchange = guarded(async () => {
+            const action = select.value;
+            const mapping = padMapping;
+            await stopJog(true);
+            if (mapping !== padMapping) return;
+            padMapping.buttons[key] = action;
+            oldPadInputs = readPadInputs(pad).inputs;
+            savePadMapping();
+        });
+        field.append(select);
+        row.append(label, value, field);
+        return row;
+    }));
+}
+
+function readPadInputs(pad)
+{
+    const inputs = {};
+    const values = {};
+    pad.buttons.forEach((button, index) => {
+        inputs['b' + index] = button.pressed || button.value > 0.5;
+        values['b' + index] = Number(button.value || 0);
+    });
+    const pov = pad.mapping === 'standard' || padMapping.pov < 0
+        ? 15 : decodePovAxis(pad.axes[padMapping.pov]);
+    if (pad.mapping !== 'standard')
+    {
+        for (const direction of [0, 2, 4, 6])
+        {
+            inputs['p' + direction] = pov !== 15 &&
+                [direction, (direction + 1) % 8, (direction + 7) % 8].includes(pov);
+            values['p' + direction] = Number(inputs['p' + direction]);
+        }
+    }
+    return {inputs, values};
+}
 
 function refreshGamepads()
 {
-    const pads =
-        browserPads();
-
-
-    const current =
-        padIndex;
-
-
-    $('padSelect').replaceChildren(
-
-        ...pads.map(
-            pad =>
-                new Option(
-                    `${pad.index}: ${pad.id}`,
-                    pad.index
-                )
-        )
-    );
-
-
-    if (
-        current !== null &&
-        pads.some(
-            pad =>
-                pad.index === current
-        )
-    )
-    {
-        $('padSelect').value =
-            String(current);
-    }
-
-
-    $('padStatus').textContent =
-        pads.length
-            ? `${pads.length}개 감지됨`
-            : '감지된 게임패드 없음';
-
-
-    if (!padConnected)
-    {
-        $('padName').textContent =
-            pads[0]?.id
-            || '연결된 게임패드 없음';
-    }
+    const pads = browserPads();
+    const current = $('padSelect').value;
+    $('padSelect').replaceChildren(...pads.map(pad => new Option(`${pad.index}: ${pad.id}`, pad.index)));
+    if (pads.some(pad => String(pad.index) === current)) $('padSelect').value = current;
+    $('padStatus').textContent = pads.length ? `${pads.length}개 감지됨` : '감지된 게임패드 없음';
+    if (!padConnected) $('padName').textContent = pads[0]?.id || '연결된 게임패드 없음';
 }
-
-
-// ============================================================================
-// Gamepad 연결
-// ============================================================================
 
 async function connectGamepad()
 {
+    if (padDisconnecting) return;
+    const selected = $('padSelect').value;
     refreshGamepads();
-
-
-    if (
-        $('padSelect').value === ''
-    )
-    {
-        throw Error(
-            '게임패드를 선택하세요. '
-            + '패드 버튼을 한 번 누른 뒤 감지해보세요.'
-        );
-    }
-
-
-    padIndex =
-        Number(
-            $('padSelect').value
-        );
-
-
-    padConnected =
-        true;
-
-
-    $('padEnable').checked =
-        true;
-
-
-    // 실제 확인된 축 번호
-    $('padX').value =
-        String(
-            PAD_AXIS.RIGHT_X
-        );
-
-
-    $('padY').value =
-        String(
-            PAD_AXIS.RIGHT_Y
-        );
-
-
-    const pad =
-        selectedPad();
-
-
-    $('padName').textContent =
-        pad?.id
-        || `Gamepad ${padIndex}`;
-
-
-    $('padStatus').textContent =
-        '웹 클라이언트 게임패드 연결됨';
-
-
-    oldButtons =
-        [];
-
-    oldAxes =
-        [];
-
-    oldPov =
-        15;
-
-    padActive =
-        false;
-
-    padRequireCenter =
-        true;
+    const pad = browserPads().find(pad => String(pad.index) === selected) || browserPads()[0];
+    if (!pad) throw Error('패드 버튼을 한 번 누른 뒤 감지해보세요.');
+    if (padConnected) await stopJog();
+    padAutoConnect = true;
+    padIndex = pad.index;
+    padConnected = true;
+    $('padSelect').value = String(padIndex);
+    $('padEnable').checked = true;
+    loadPadMapping(pad);
+    oldPadInputs = readPadInputs(pad).inputs;
+    $('padName').textContent = pad.id;
+    $('padStatus').textContent = '게임패드 연결됨 / 스틱·버튼을 놓으세요.';
+    padActive = false;
+    padRequireCenter = true;
 }
 
-
-async function disconnectGamepad()
+async function disconnectGamepad(manual = true)
 {
-    await stopJog();
-
-
-    padConnected =
-        false;
-
-
-    padIndex =
-        null;
-
-
-    $('padEnable').checked =
-        false;
-
-
-    oldButtons =
-        [];
-
-    oldAxes =
-        [];
-
-    oldPov =
-        15;
-
-
-    $('padStatus').textContent =
-        '해제됨';
-
-
-    $('padName').textContent =
-        '연결된 게임패드 없음';
+    if (padDisconnecting) return;
+    padDisconnecting = true;
+    padAutoConnect = false;
+    padConnected = false;
+    padIndex = null;
+    $('padEnable').checked = false;
+    try { await stopJog(); }
+    finally
+    {
+        oldPadInputs = {};
+        $('padStatus').textContent = manual ? '해제됨' : '연결 끊김 / 자동 재연결 대기';
+        $('padName').textContent = '연결된 게임패드 없음';
+        padAutoConnect = !manual;
+        padDisconnecting = false;
+    }
 }
-
 
 // ============================================================================
 // Recipe / Point Gamepad 선택
@@ -7274,61 +7299,30 @@ $('padConnect').onclick =
     );
 
 
-$('padDisconnect').onclick =
-    guarded(
-        disconnectGamepad
-    );
-
-
-$('padEnable').onchange =
-    guarded(
-        async () => {
-
-            if (
-                $('padEnable').checked &&
-                !padConnected
-            )
-            {
-                await connectGamepad();
-            }
-
-            else if (
-                !$('padEnable').checked
-            )
-            {
-                await stopJog();
-            }
-        }
-    );
-
-
-window.addEventListener(
-    'gamepadconnected',
-
-    refreshGamepads
-);
-
-
-window.addEventListener(
-    'gamepaddisconnected',
-
-    guarded(
-        async () => {
-
-            refreshGamepads();
-
-
-            if (
-                padConnected &&
-                !selectedPad()
-            )
-            {
-                await disconnectGamepad();
-            }
-        }
-    )
-);
-
+$('padDisconnect').onclick = guarded(() => disconnectGamepad());
+$('padEnable').onchange = guarded(async () => {
+    if ($('padEnable').checked && !padConnected) await connectGamepad();
+    else if (!$('padEnable').checked) await stopJog();
+});
+$('padMappingReset').onclick = guarded(async () => {
+    const pad = selectedPad();
+    if (!pad) throw Error('게임패드를 먼저 연결하세요.');
+    await stopJog(true);
+    padMapping = defaultPadMapping(pad);
+    padMappingSignature = '';
+    renderPadMapping(pad);
+    oldPadInputs = readPadInputs(pad).inputs;
+    savePadMapping();
+});
+window.addEventListener('gamepadconnected', guarded(async () => {
+    padAutoConnect = true;
+    refreshGamepads();
+    if (!padConnected) await connectGamepad();
+}));
+window.addEventListener('gamepaddisconnected', guarded(async () => {
+    if (padConnected && !selectedPad()) await disconnectGamepad(false);
+    refreshGamepads();
+}));
 
 // ============================================================================
 // 진동 테스트 버튼
@@ -7505,651 +7499,139 @@ function setSpeedStep(
 }
 
 
-// ============================================================================
-// D-Pad -> Pan/Tilt 속도
-// ============================================================================
-
-function handlePovSpeed(pov)
+function renderGamepadMonitor(pad, rightX, rightY, inputs, values)
 {
-    // 같은 방향을 계속 누르고 있는 동안
-    // 반복 상승 방지
-    if (
-        pov === oldPov
-    )
+    for (const row of $('padMappings').querySelectorAll('tr'))
     {
+        row.classList.toggle('pressed', Boolean(inputs[row.dataset.input]));
+        row.cells[1].textContent = (values[row.dataset.input] || 0).toFixed(2);
+    }
+    $('padValues').textContent = [
+        `Pan Axis ${padMapping.pan}: ${rightX.toFixed(3)} / Tilt Axis ${padMapping.tilt}: ${rightY.toFixed(3)}`,
+        '전체 축: ' + pad.axes.map((value, index) => `${index}=${value.toFixed(3)}`).join('  '),
+        `현재 이동: ${jog ? `Pan=${jog.pan}, Tilt=${jog.tilt}` : 'STOP'}`,
+        `통합 속도: ${$('speedLevel').value} / 8`,
+        `레시피: ${selected()?.name || '-'} / 포인트: ${selectedPoint()?.name || '-'}`,
+        `레이저: ${status.laser?.on ? 'ON' : 'OFF'}`,
+        `중앙·버튼 해제 대기: ${padRequireCenter ? 'YES' : 'NO'}`
+    ].join('\n');
+}
+
+async function runPadAction(action)
+{
+    switch (action)
+    {
+        case 'goto': await gotoSelectedPoint(); break;
+        case 'home': await gotoHome(); break;
+        case 'laser': await toggleLaser(); break;
+        case 'laser_on': await cmd('laser.on', {manual: true}); break;
+        case 'laser_off': await cmd('laser.off'); break;
+        case 'recipe_prev': stepRecipe(-1); break;
+        case 'recipe_next': stepRecipe(1); break;
+        case 'point_prev': stepPoint(-1); break;
+        case 'point_next': stepPoint(1); break;
+        case 'speed_down': setSpeedStep('speedLevel', -1); break;
+        case 'speed_up': setSpeedStep('speedLevel', 1); break;
+    }
+}
+
+function pollGamepad()
+{
+    if (padDisconnecting) return;
+    if (jogStopBusy)
+    {
+        padRequireCenter = true;
         return;
     }
-
-
-    oldPov =
-        pov;
-
-
-    if (
-        pov === 15
-    )
+    if (!padConnected && padAutoConnect && browserPads().length)
     {
+        guarded(connectGamepad)();
         return;
     }
-
-
-    const delta = [1, 2, 3].includes(pov) ? +1 : [5, 6, 7].includes(pov) ? -1 : 0;
-    if (delta)
+    const pad = selectedPad();
+    if (!pad)
     {
-        setSpeedStep('speedLevel', delta);
-        $('padStatus').textContent = `Pan/Tilt 통합 속도 ${delta > 0 ? '+' : ''}${delta}`;
+        if (padConnected) guarded(() => disconnectGamepad(false))();
+        $('padValues').textContent = '게임패드 입력 없음';
+        return;
+    }
+    renderPadMapping(pad);
+    const {inputs, values} = readPadInputs(pad);
+    let rightX = pad.axes[padMapping.pan] || 0;
+    let rightY = pad.axes[padMapping.tilt] || 0;
+    for (const [key, pressed] of Object.entries(inputs))
+    {
+        if (!pressed) continue;
+        switch (padMapping.buttons[key])
+        {
+            case 'pan_left': rightX -= 1; break;
+            case 'pan_right': rightX += 1; break;
+            case 'tilt_up': rightY -= 1; break;
+            case 'tilt_down': rightY += 1; break;
+        }
+    }
+    renderGamepadMonitor(pad, rightX, rightY, inputs, values);
+    const previous = oldPadInputs;
+    oldPadInputs = {...inputs};
+    if (!$('padEnable').checked || document.hidden || !document.hasFocus() || !status.serial?.connected)
+    {
+        padRequireCenter = true;
+        if (padActive) guarded(stopJog)();
+        return;
+    }
+    const stops = Object.keys(inputs).filter(key => inputs[key] && padMapping.buttons[key] === 'stop');
+    if (stops.length)
+    {
+        if (stops.some(key => !previous[key]) || padActive) guarded(stopJog)();
+        padRequireCenter = true;
+        return;
+    }
+    const xActive = Math.abs(rightX) >= PAD_DEADZONE;
+    const yActive = Math.abs(rightY) >= PAD_DEADZONE;
+    const centered = !xActive && !yActive;
+    if (padRequireCenter)
+    {
+        if (centered && !Object.values(inputs).some(Boolean)) padRequireCenter = false;
+        return;
+    }
+    const actions = [...new Set(Object.keys(inputs)
+        .filter(key => inputs[key] && !previous[key])
+        .map(key => padMapping.buttons[key]))];
+    for (const action of actions) guarded(() => runPadAction(action))();
+    if (actions.includes('goto') || actions.includes('home')) return;
+    if (centered)
+    {
+        if (padActive)
+        {
+            const now = performance.now();
+            if (!padCenteredSince) padCenteredSince = now;
+            else if (now - padCenteredSince >= PAD_CENTER_STOP_DELAY_MS)
+            {
+                jog = null;
+                padActive = false;
+                padCenteredSince = 0;
+                guarded(() => cmd('motion.stop', {preserve_laser_manual: true}, true))();
+            }
+        }
+        else padCenteredSince = 0;
+        padCentered = true;
+    }
+    else
+    {
+        padCenteredSince = 0;
+        const nextJog = {
+            pan: !xActive ? 'stop' : rightX > 0 ? 'right' : 'left',
+            tilt: !yActive ? 'stop' : rightY < 0 ? 'up' : 'down'
+        };
+        const changed = !jog || jog.pan !== nextJog.pan || jog.tilt !== nextJog.tilt;
+        jog = nextJog;
+        padActive = true;
+        padCentered = false;
+        if (changed) guarded(sendJog)();
     }
 }
 
-
-// ============================================================================
-// Gamepad 입력 이름 표시
-// ============================================================================
-
-function buttonState(
-    buttons,
-    index
-)
-{
-    return buttons[index]
-        ? '● ON '
-        : '○ OFF';
-}
-
-
-function axisDirectionX(value)
-{
-    if (
-        Math.abs(value) <
-        PAD_DEADZONE
-    )
-    {
-        return 'CENTER';
-    }
-
-
-    return value > 0
-        ? 'RIGHT'
-        : 'LEFT';
-}
-
-
-function axisDirectionY(value)
-{
-    if (
-        Math.abs(value) <
-        PAD_DEADZONE
-    )
-    {
-        return 'CENTER';
-    }
-
-
-    return value < 0
-        ? 'UP'
-        : 'DOWN';
-}
-
-
-// ============================================================================
-// 사람이 알아보기 쉬운 Gamepad Monitor
-// ============================================================================
-
-function renderGamepadMonitor(
-    pad,
-    rightX,
-    rightY,
-    pov,
-    buttons
-)
-{
-    const recipe =
-        selected();
-
-
-    const point =
-        selectedPoint();
-
-
-    let moveText =
-        'STOP';
-
-
-    if (jog)
-    {
-        moveText =
-            `Pan=${jog.pan}, Tilt=${jog.tilt}`;
-    }
-
-
-    const lines = [
-
-        '========== GAMEPAD INPUT MONITOR ==========',
-
-        '',
-
-        '[오른쪽 조이스틱 - Pan/Tilt 수동 이동]',
-
-        `Pan  / RIGHT X / Axis 2 : ${rightX.toFixed(3).padStart(7)}   ${axisDirectionX(rightX)}`,
-
-        `Tilt / RIGHT Y / Axis 5 : ${rightY.toFixed(3).padStart(7)}   ${axisDirectionY(rightY)}`,
-
-        `현재 이동 명령           : ${moveText}`,
-
-        '',
-
-        '[방향키 - 수동 속도 단계]',
-
-        `D-Pad / Axis 9          : ${povName(pov)}`,
-
-        `Pan/Tilt 통합 속도     : ${$('speedLevel').value} / 8`,
-
-        '',
-
-        '[버튼 입력]',
-
-        `${buttonState(buttons, PAD_BUTTON.A)}  A    : 선택 레시피 포인트로 이동`,
-
-        `${buttonState(buttons, PAD_BUTTON.B)}  B    : 강제 정지`,
-
-        `${buttonState(buttons, PAD_BUTTON.X)}  X    : 홈 포지션 이동 (0°, 0°)`,
-
-        `${buttonState(buttons, PAD_BUTTON.Y)}  Y    : 레이저 ON / OFF`,
-
-        '',
-
-        `${buttonState(buttons, PAD_BUTTON.LB)}  LB   : 이전 레시피`,
-
-        `${buttonState(buttons, PAD_BUTTON.RB)}  RB   : 다음 레시피`,
-
-        `${buttonState(buttons, PAD_BUTTON.LT)}  LT   : 이전 포인트`,
-
-        `${buttonState(buttons, PAD_BUTTON.RT)}  RT   : 다음 포인트`,
-
-        '',
-
-        `${buttonState(buttons, PAD_BUTTON.BACK)}  BACK : 입력 확인`,
-
-        `${buttonState(buttons, PAD_BUTTON.NEXT)}  NEXT : 입력 확인`,
-
-        `${buttonState(buttons, PAD_BUTTON.L3)}  L3   : 왼쪽 조이스틱 클릭`,
-
-        `${buttonState(buttons, PAD_BUTTON.R3)}  R3   : 오른쪽 조이스틱 클릭`,
-
-        '',
-
-        '[현재 선택]',
-
-        `레시피                  : ${recipe?.name || '-'}`,
-
-        `포인트                  : ${point?.name || '-'}`,
-
-        '',
-
-        '[레이저]',
-
-
-        `Laser                   : ${status.laser?.on ? 'ON' : 'OFF'}`,
-
-        '',
-
-        '[연결 상태]',
-
-        `Gamepad                 : ${padConnected ? 'CONNECTED' : 'DISCONNECTED'}`,
-
-        `PT503                   : ${status.serial?.connected ? 'CONNECTED' : 'DISCONNECTED'}`,
-
-        '',
-
-        '[안전 상태]',
-
-        `스틱 중앙 복귀 대기     : ${padRequireCenter ? 'YES' : 'NO'}`,
-
-        '',
-
-        '============================================'
-    ];
-
-
-    $('padValues').textContent =
-        lines.join('\n');
-}
-
-
-// ============================================================================
-// Gamepad Main Poll
-// ============================================================================
-
-setInterval(
-    () => {
-
-        const pad =
-            selectedPad();
-
-
-        $('padName').textContent =
-            padConnected
-                ? (
-                    pad?.id ||
-                    '게임패드 재감지 필요'
-                )
-                : '연결된 게임패드 없음';
-
-
-        // --------------------------------------------------------------------
-        // 패드 없음
-        // --------------------------------------------------------------------
-
-        if (!pad)
-        {
-            if (padActive)
-            {
-                const now = performance.now();
-                if (!padMissingSince)
-                {
-                    padMissingSince = now;
-                }
-                else if (now - padMissingSince >= PAD_MISSING_STOP_DELAY_MS)
-                {
-                    guarded(stopJog)();
-                }
-            }
-
-
-            if (padConnected)
-            {
-                $('padStatus').textContent =
-                    '패드 신호 없음';
-            }
-
-
-            $('padValues').textContent =
-                '게임패드 입력 없음';
-
-
-            return;
-        }
-
-
-        padMissingSince =
-            0;
-
-        // --------------------------------------------------------------------
-        // RAW 입력 읽기
-        // --------------------------------------------------------------------
-
-        let rightX =
-            pad.axes[
-                PAD_AXIS.RIGHT_X
-            ]
-            || 0;
-
-
-        let rightY =
-            pad.axes[
-                PAD_AXIS.RIGHT_Y
-            ]
-            || 0;
-
-
-        const rawPov =
-            pad.axes[
-                PAD_AXIS.POV
-            ];
-
-
-        const pov =
-            decodePovAxis(
-                rawPov
-            );
-
-
-        const buttons =
-            pad.buttons.map(
-                button =>
-                    button.pressed
-            );
-
-
-        // --------------------------------------------------------------------
-        // 사람이 읽을 수 있는 상태 표시
-        // --------------------------------------------------------------------
-
-        renderGamepadMonitor(
-            pad,
-            rightX,
-            rightY,
-            pov,
-            buttons
-        );
-
-
-        // --------------------------------------------------------------------
-        // 제어 비활성 상태
-        // --------------------------------------------------------------------
-
-        if (
-            !$('padEnable').checked ||
-            !padConnected ||
-            document.hidden ||
-            !document.hasFocus() ||
-            !status.serial?.connected
-        )
-        {
-            oldButtons =
-                buttons.slice();
-
-
-            oldAxes =
-                pad.axes.slice();
-
-
-            oldPov =
-                pov;
-
-
-            return;
-        }
-
-
-        // --------------------------------------------------------------------
-        // 버튼 Rising Edge
-        // --------------------------------------------------------------------
-
-        const edge =
-            index =>
-                Boolean(
-                    buttons[index] &&
-                    !oldButtons[index]
-                );
-
-
-        // --------------------------------------------------------------------
-        // B = 무조건 STOP
-        // 가장 먼저 처리
-        // --------------------------------------------------------------------
-
-        if (
-            edge(
-                PAD_BUTTON.B
-            )
-        )
-        {
-            guarded(
-                stopJog
-            )();
-        }
-
-
-        // --------------------------------------------------------------------
-        // A = 선택 포인트 이동
-        // --------------------------------------------------------------------
-
-        if (
-            edge(
-                PAD_BUTTON.A
-            )
-        )
-        {
-            guarded(
-                gotoSelectedPoint
-            )();
-        }
-
-
-        // --------------------------------------------------------------------
-        // X = HOME
-        // --------------------------------------------------------------------
-
-        if (
-            edge(
-                PAD_BUTTON.X
-            )
-        )
-        {
-            guarded(
-                gotoHome
-            )();
-        }
-
-
-        // --------------------------------------------------------------------
-        // Y = Laser Toggle
-        // --------------------------------------------------------------------
-
-        if (
-            edge(
-                PAD_BUTTON.Y
-            )
-        )
-        {
-            guarded(
-                toggleLaser
-            )();
-        }
-
-
-        // --------------------------------------------------------------------
-        // LB / RB = Recipe
-        // --------------------------------------------------------------------
-
-        if (
-            edge(
-                PAD_BUTTON.LB
-            )
-        )
-        {
-            stepRecipe(
-                -1
-            );
-        }
-
-
-        if (
-            edge(
-                PAD_BUTTON.RB
-            )
-        )
-        {
-            stepRecipe(
-                +1
-            );
-        }
-
-
-        // --------------------------------------------------------------------
-        // LT / RT = Point
-        // --------------------------------------------------------------------
-
-        if (
-            edge(
-                PAD_BUTTON.LT
-            )
-        )
-        {
-            stepPoint(
-                -1
-            );
-        }
-
-
-        if (
-            edge(
-                PAD_BUTTON.RT
-            )
-        )
-        {
-            stepPoint(
-                +1
-            );
-        }
-
-
-        // --------------------------------------------------------------------
-        // D-Pad 속도 변경
-        // --------------------------------------------------------------------
-
-        handlePovSpeed(
-            pov
-        );
-
-
-        // --------------------------------------------------------------------
-        // Right Stick -> Pan / Tilt
-        // --------------------------------------------------------------------
-
-        const xActive =
-            Math.abs(
-                rightX
-            ) >= PAD_DEADZONE;
-
-
-        const yActive =
-            Math.abs(
-                rightY
-            ) >= PAD_DEADZONE;
-
-
-        const centered =
-            !xActive &&
-            !yActive;
-
-
-        // --------------------------------------------------------------------
-        // 스틱 중앙
-        // --------------------------------------------------------------------
-
-        if (centered)
-        {
-            // 강제정지 이후 중앙 복귀 확인
-            if (padRequireCenter)
-            {
-                padRequireCenter =
-                    false;
-            }
-
-
-            if (padActive)
-            {
-                const now = performance.now();
-                if (!padCenteredSince)
-                {
-                    padCenteredSince = now;
-                }
-                else if (now - padCenteredSince >= PAD_CENTER_STOP_DELAY_MS)
-                {
-                    jog =
-                        null;
-
-
-                    padActive =
-                        false;
-
-
-                    padCenteredSince =
-                        0;
-
-
-                    guarded(
-                        () =>
-                            cmd(
-                                'motion.stop',
-                                {preserve_laser_manual: true},
-                                true
-                            )
-                    )();
-                }
-            }
-            else
-            {
-                padCenteredSince =
-                    0;
-            }
-
-
-            padCentered =
-                true;
-        }
-
-        // --------------------------------------------------------------------
-        // 스틱 이동
-        // --------------------------------------------------------------------
-
-        else
-        {
-            padCenteredSince =
-                0;
-
-            // STOP 직후 스틱이 계속 기울어져 있으면
-            // 재동작 금지
-            if (!padRequireCenter)
-            {
-                const nextJog = {
-
-                    pan:
-                        !xActive
-                            ? 'stop'
-                            : rightX > 0
-                                ? 'right'
-                                : 'left',
-
-                    tilt:
-                        !yActive
-                            ? 'stop'
-                            : rightY < 0
-                                ? 'up'
-                                : 'down'
-                };
-
-
-                const changed =
-
-                    !jog ||
-
-                    jog.pan !==
-                        nextJog.pan ||
-
-                    jog.tilt !==
-                        nextJog.tilt;
-
-
-                jog =
-                    nextJog;
-
-
-                padActive =
-                    true;
-
-
-                padCentered =
-                    false;
-
-
-                if (changed)
-                {
-                    guarded(
-                        sendJog
-                    )();
-                }
-            }
-        }
-
-
-        // --------------------------------------------------------------------
-        // 이전 입력 저장
-        // --------------------------------------------------------------------
-
-        oldButtons =
-            buttons.slice();
-
-
-        oldAxes =
-            pad.axes.slice();
-
-    },
-    60
-);
-
+setInterval(pollGamepad, 60);
 
 // ============================================================================
 // 초기 실행
@@ -8162,7 +7644,15 @@ Promise.allSettled([
     ports(),
     loadRecipes(),
     loadCommands(),
-    loadDrawings()
+    (async () => {
+        await loadDrawings();
+        // CAD 모듈의 이벤트 등록이 끝난 후 첫 도면을 불러옵니다.
+        if (document.readyState === 'loading')
+            await new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, {once: true}));
+        if (drawings.length && !activeDrawing)
+            await drawingAction(() => loadDrawing(drawings[0].id),
+                {pending: '첫 도면 불러오는 중…', done: '도면 준비가 완료되었습니다.', buttonId: 'loadDrawing'})();
+    })()
 ]);
 
 
