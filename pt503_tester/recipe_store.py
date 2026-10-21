@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import sys
@@ -16,6 +17,7 @@ from typing import Any
 
 RECIPE_SCHEMA = "pt503.recipe.bundle"
 RECIPE_VERSION = 1
+LOGGER = logging.getLogger(__name__)
 
 
 def app_state_dir() -> Path:
@@ -188,7 +190,8 @@ class RecipeStore:
             return
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as exc:
+            LOGGER.warning("Recipe file load failed: %s; using in-memory Default recipe: %s", self.path, exc)
             self._recipes = [Recipe.create("Default", index=1)]
             return
         recipes_data = data.get("recipes", []) if isinstance(data, dict) else []

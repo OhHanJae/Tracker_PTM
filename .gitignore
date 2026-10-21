@@ -18,3 +18,4 @@ tests
 !/tests/test_laser_states.py
 !/tests/test_manual_laser_motion.py
 !/tests/test_drawing_workflow.cjs
+!/tests/test_recipe_load_diagnostics.py
