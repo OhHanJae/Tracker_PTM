@@ -152,6 +152,9 @@ DRAWING_API_COMMANDS = {
 MAX_DRAWING_UPLOAD_BYTES = 512 * 1024 * 1024
 
 
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON number is not allowed: {value}")
+
 
 class HeadlessApiError(ValueError):
     def __init__(self, code: str, message: str) -> None:
@@ -211,6 +214,9 @@ class HeadlessController:
         self._address = 1
         self.current_pan: float | None = None
         self.current_tilt: float | None = None
+        self._position_received_at: dict[str, float] = {}
+        self._axis_target: dict[str, float | None] | None = None
+        self._axis_target_motion_id: str | None = None
         self.last_rx: list[dict[str, Any]] = []
         self._rx_buffer = bytearray()
         self.last_tx: dict[str, Any] | None = None
@@ -330,6 +336,13 @@ class HeadlessController:
         self._pending_motion = None
         if pending is None:
             return
+        if error is None and pending.get("recipe_revision"):
+            try:
+                if (self.recipe_store.storage_error or self.recipe_store.recipe_revision(pending["recipe_id"])
+                        != pending["recipe_revision"]):
+                    error = ("CONFIG_OR_CAL_ERROR", "recipe changed during movement")
+            except (KeyError, ValueError, OSError) as exc:
+                error = ("CONFIG_OR_CAL_ERROR", str(exc))
         data = {
             "motion_id": pending.get("motion_id"),
             "request_id": pending.get("request_id"),
@@ -358,6 +371,8 @@ class HeadlessController:
             self._emit_event("motion.completed", data, pending.get("client_id"))
         else:
             code, message = error
+            self._axis_target = None
+            self._axis_target_motion_id = None
             self._failed_motion_id = pending.get("motion_id")
             self._last_motion_error = code
             self._emit_event(
@@ -478,8 +493,9 @@ class HeadlessController:
 
     def _core_request(self, command: str, params: dict[str, Any], *,
                       host: str | None = None, port: int | None = None,
-                      timeout_s: float = CORE_WAKE_TIMEOUT_S,
+                      timeout_s: float | None = None,
                       error_code: str = "CORE_SETTINGS_FAILED") -> dict[str, Any]:
+        timeout_s = CORE_WAKE_TIMEOUT_S if timeout_s is None else timeout_s
         host = host or os.environ.get("PT503_CORE_HOST", "127.0.0.1")
         port = port if port is not None else int(os.environ.get("PT503_CORE_PORT", "8000"))
         try:
@@ -566,6 +582,8 @@ class HeadlessController:
         return result
 
     def _effective_laser_mode(self) -> int:
+        if self._laser_plc_mode not in {1, 2, 3, 4, 5}:
+            return 0
         return 1 if self.laser_control_priority else self._laser_plc_mode
 
     def _apply_laser_state(self, state: str, *, manual: bool = False, profile: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1033,14 +1051,26 @@ class HeadlessController:
             self._last_serial_tx_at = 0.0
             self._position_speed_frame = None
             self.current_pan = self.current_tilt = None
+            self._position_received_at.clear()
+            self._axis_target = None
+            self._axis_target_motion_id = None
             self._home_valid = False
             self._rx_buffer.clear()
 
     def status(self) -> dict[str, Any]:
         with self._lock:
+            selected_revision = None
+            if self._selected_recipe_id and not self.recipe_store.storage_error:
+                try:
+                    selected_revision = self.recipe_store.recipe_revision(self._selected_recipe_id)
+                except (KeyError, ValueError):
+                    pass
             return {
                 "protocol": PROTOCOL_NAME,
                 "version": PROTOCOL_VERSION,
+                "recipe_storage": {"ready": not bool(self.recipe_store.storage_error),
+                                   "error": self.recipe_store.storage_error},
+                "selected_recipe_revision": selected_revision,
                 "serial": {
                     "connected": self.connected,
                     "port": self._port if self.connected else "",
@@ -1049,7 +1079,13 @@ class HeadlessController:
                     "address": self._address,
                 },
                 "position": {"pan": self.current_pan, "tilt": self.current_tilt},
+                "position_age_ms": {
+                    axis: max(0.0, (time.monotonic() - self._position_received_at[axis]) * 1000)
+                    if axis in self._position_received_at else None for axis in ("pan", "tilt")
+                },
                 "motion": {
+                    "target_position": dict(self._axis_target) if self._axis_target is not None else None,
+                    "target_motion_id": self._axis_target_motion_id,
                     "completion": dict(self.completion_config),
                     "manual_jog_lease_max_ms": 3000,
                     "manual_jog_token_supported": True,
@@ -1421,6 +1457,8 @@ class HeadlessController:
             response = decode_response(frame, last_tx_checksum)
             if response.address != self._address or response.checksum_ok is not True:
                 continue
+            if response.kind in {"pan", "tilt"} and type(response.value) in (int, float) and math.isfinite(response.value):
+                self._position_received_at[response.kind] = time.monotonic()
             if self._tracker and response.kind in {"pan", "tilt"} and isinstance(response.value, (int, float)):
                 result = self._tracker.update(response.kind, float(response.value))
                 self.motion_state = result.status
@@ -1494,8 +1532,8 @@ class HeadlessController:
                 self._laser_core_policy = {**params, "plc_mode": plc_mode, "enabled": enabled,
                                            "automatic_off": automatic_off, "manual_allowed": allowed,
                                            "state_allowed": state_allowed}
-                mode = 1 if self.laser_control_priority else plc_mode
-                if self.laser_control_priority:
+                mode = 1 if self.laser_control_priority and plc_mode in {1, 2, 3, 4, 5} else plc_mode
+                if self.laser_control_priority and mode == 1:
                     enabled = False
                     automatic_off = not local_allowed
                     allowed = state_allowed = local_allowed
@@ -1641,6 +1679,13 @@ class HeadlessController:
         with self._lock:
             if self._shutdown.is_set():
                 raise HeadlessApiError("SERVICE_STOPPING", "server is shutting down")
+            if command in {"point.goto", "motion.goto"} and self.recipe_store.storage_error:
+                raise HeadlessApiError("RECIPE_STORAGE_ERROR", self.recipe_store.storage_error)
+            pending = self._pending_motion
+            if pending and pending.get("automatic") and (
+                    command.startswith(("motion.", "home.", "preset.", "scan.", "cruise.", "pattern.", "recipe.", "point.", "drawing."))
+                    and command not in {"motion.stop", "motion.force_stop", "recipe.list", "recipe.get", "point.list", "drawing.list", "drawing.get"}):
+                raise HeadlessApiError("BUSY", "automatic movement owns the motion and recipe until completion")
             manual_off_error = None
             if (command.startswith(("motion.", "home.", "preset.", "scan.", "cruise.", "pattern.",
                                     "pelco.", "lens.", "aux.", "camera.", "maintenance.", "zero."))
@@ -1691,6 +1736,11 @@ class HeadlessController:
                 self._selected_point_id = point.id
                 return {"recipe_id": recipe_id, "point_id": point.id, "name": point.name}
             if command in {"motion.goto", "point.goto"}:
+                automatic = self._bool(params, "require_homed", False)
+                if automatic and not self._home_valid:
+                    raise HeadlessApiError("HOMING_REQUIRED", "HOME is required before automatic point movement")
+                if automatic and self._active_jog is not None:
+                    raise HeadlessApiError("BUSY", "manual JOG must stop before automatic point movement")
                 recipe_id = str(params.get("recipe_id") or self._selected_recipe_id or "").strip()
                 point_id = str(params.get("point_id") or self._selected_point_id or "").strip()
                 if not recipe_id or not point_id:
@@ -1704,6 +1754,13 @@ class HeadlessController:
                 self._selected_recipe_id = recipe_id
                 self._selected_point_id = point_id
                 target, correction = self._recipe_motion_target(recipe_id, point)
+                recipe = self.recipe_store.get_recipe(recipe_id)
+                if automatic and point.drawing_point_id and not recipe.drawing.get("calibration"):
+                    raise HeadlessApiError("CONFIG_OR_CAL_ERROR", "CAD point requires recipe calibration")
+                revision = self.recipe_store.recipe_revision(recipe_id)
+                expected_revision = params.get("expected_recipe_revision")
+                if expected_revision is not None and expected_revision != revision:
+                    raise HeadlessApiError("CONFIG_OR_CAL_ERROR", "recipe changed during production; stop and review the mapping")
                 with self._laser_lock:
                     auto_laser = (self._bool(params, "laser_after_move", True)
                                   and not self._laser_manual_deadline
@@ -1725,6 +1782,7 @@ class HeadlessController:
                 if self._pending_motion is not None:
                     self._pending_motion.update(
                         command=command, recipe_id=recipe_id, point_id=point_id,
+                        automatic=automatic, recipe_revision=revision,
                         laser_after_move=auto_laser, laser_generation=laser_generation,
                     )
                 return {
@@ -1732,6 +1790,7 @@ class HeadlessController:
                     "recipe_id": recipe_id,
                     "point_id": point_id,
                     "pose_correction": correction,
+                    "recipe_revision": revision,
                 }
             if command == "home.start":
                 self._home_valid = False
@@ -1763,6 +1822,8 @@ class HeadlessController:
                 self._int(params, "address", 1, minimum=1, maximum=255)
                 self._int(params, "baudrate", 9600, minimum=1200, maximum=115200)
             if command == "motion.jog":
+                self._axis_target = None
+                self._axis_target_motion_id = None
                 if "pan_speed" in params or "tilt_speed" in params:
                     raise HeadlessApiError("INVALID_PARAMS", "Use speed_level (1..8)")
                 # Opt-in lease for clients relayed through a persistent Core socket.
@@ -1846,6 +1907,8 @@ class HeadlessController:
                     "jog_token": token,
                 }
             if command in {"motion.stop", "cruise.stop", "scan.stop"}:
+                self._axis_target = None
+                self._axis_target_motion_id = None
                 self._jog_next_resend = 0.0
                 self._active_jog = None
                 self._jog_owner_client_id = None
@@ -1966,6 +2029,8 @@ class HeadlessController:
                     "point_id": None,
                     "home": False,
                 }
+                self._axis_target = {axis: params.get(axis) for axis in ("pan", "tilt")}
+                self._axis_target_motion_id = self._pending_motion["motion_id"]
                 result = {**result, "motion_id": self._pending_motion["motion_id"]}
             if force_stop:
                 with self._laser_lock:
@@ -2721,12 +2786,12 @@ class WebHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= 1048576:
                 raise HeadlessApiError("INVALID_REQUEST", "Body size must be 1..1048576 bytes")
-            request = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+            request = json.loads(self.rfile.read(length).decode("utf-8") or "{}", parse_constant=_reject_json_constant)
             if not isinstance(request, dict):
                 raise HeadlessApiError("INVALID_REQUEST", "JSON object required")
-            command = str(request.get("command", ""))
+            command = request.get("command")
             params = request.get("params", {})
-            if not command or not isinstance(params, dict):
+            if not isinstance(command, str) or not command.strip() or not isinstance(params, dict):
                 raise HeadlessApiError("INVALID_REQUEST", "command and params object are required")
             self._send_json({"ok": True, "result": self.controller.command(command, params)})
         except self._CLIENT_DISCONNECT_ERRORS:
@@ -2966,7 +3031,7 @@ class TcpJsonHandler(socketserver.StreamRequestHandler):
     def _handle_line(self, raw_line: bytes) -> None:
         request_id: Any = None
         try:
-            request = json.loads(raw_line.decode("utf-8"))
+            request = json.loads(raw_line.decode("utf-8"), parse_constant=_reject_json_constant)
             if not isinstance(request, dict):
                 raise HeadlessApiError("INVALID_REQUEST", "JSON object required")
             request_id = request.get("id")

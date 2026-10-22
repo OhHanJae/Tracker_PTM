@@ -705,7 +705,7 @@ class DrawingStore:
                 for point in payload["points"]:
                     if point["id"] in existing_point_ids:
                         point["id"] = str(uuid.uuid4())
-            self.recipe_store.import_document(document)
+            self.recipe_store.import_document(document, remap_conflicting_indices=True)
             selected = str(state.get("selected_recipe_id") or "")
             record["selected_recipe_id"] = remapped.get(selected, selected) if any(recipe.id == selected for recipe in recipes) else ""
         record["updated"] = now_iso()

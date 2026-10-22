@@ -21,7 +21,7 @@ def test_recipe_read_error_logs_and_retains_existing_fallback(tmp_path, caplog):
     path = tmp_path / "recipes.json"
     RecipeStore(path)
     original = path.read_bytes()
-    with patch.object(type(path), "read_text", side_effect=OSError("read denied")):
+    with patch.object(type(path), "read_bytes", side_effect=OSError("read denied")):
         with caplog.at_level("WARNING", logger="pt503_tester.recipe_store"):
             store = RecipeStore(path)
     assert store.get_recipe().name == "Default"

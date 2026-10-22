@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import math
 import os
 import sys
+import tempfile
+from contextlib import contextmanager
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -18,6 +21,33 @@ from typing import Any
 RECIPE_SCHEMA = "pt503.recipe.bundle"
 RECIPE_VERSION = 1
 LOGGER = logging.getLogger(__name__)
+
+
+class RecipeStorageError(OSError):
+    pass
+
+
+@contextmanager
+def _storage_lock(path: Path):
+    with path.with_suffix(path.suffix + ".lock").open("a+b") as handle:
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def app_state_dir() -> Path:
@@ -181,16 +211,31 @@ class RecipeStore:
         self.path = Path(path) if path is not None else app_state_dir() / "recipes.json"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._recipes: list[Recipe] = []
+        self.storage_error = ""
+        self._disk_signature: str | None = None
         self.load()
 
     def load(self) -> None:
+        self.storage_error = ""
         if not self.path.exists():
+            self._disk_signature = None
             self._recipes = [Recipe.create("Default", index=1)]
             self.save()
             return
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            raw = self.path.read_bytes()
+            text = raw.decode("utf-8")
+            data = json.loads(text)
+            if (not isinstance(data, dict) or not isinstance(data.get("recipes"), list)
+                    or not data["recipes"]):
+                raise ValueError("recipe document must contain a non-empty recipes array")
+            if data.get("schema") not in (None, RECIPE_SCHEMA) or data.get("version", RECIPE_VERSION) != RECIPE_VERSION:
+                raise ValueError("unsupported recipe schema or version")
+            if "version" in data:
+                self._validated_document(data)
+            self._disk_signature = hashlib.sha256(raw).hexdigest()
+        except (OSError, ValueError, TypeError, OverflowError) as exc:
+            self.storage_error = str(exc)
             LOGGER.warning("Recipe file load failed: %s; using in-memory Default recipe: %s", self.path, exc)
             self._recipes = [Recipe.create("Default", index=1)]
             return
@@ -209,18 +254,32 @@ class RecipeStore:
         self._assign_missing_indices(self._recipes)
 
     def save(self) -> None:
+        if self.storage_error:
+            raise RecipeStorageError("Recipe store is unavailable; restore the file and reload: " + self.storage_error)
         payload = {
             "schema": RECIPE_SCHEMA,
             "version": RECIPE_VERSION,
             "updated": now_iso(),
             "recipes": [recipe.to_dict() for recipe in self._recipes],
         }
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temporary.replace(self.path)
+        text = json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False)
+        temporary: Path | None = None
+        with _storage_lock(self.path):
+            signature = hashlib.sha256(self.path.read_bytes()).hexdigest() if self.path.exists() else None
+            if signature != self._disk_signature:
+                raise RecipeStorageError("Recipe file changed externally; reload before saving")
+            try:
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="", dir=self.path.parent,
+                                                 prefix=self.path.name + ".", suffix=".tmp", delete=False) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(text)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                temporary.replace(self.path)
+                self._disk_signature = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
 
     def export_document(self, recipe_id: str | None = None) -> dict[str, Any]:
         recipes = [self.get_recipe(recipe_id)] if recipe_id else list(self._recipes)
@@ -234,17 +293,19 @@ class RecipeStore:
     def _save_or_restore(self, previous: list[Recipe]) -> None:
         try:
             self.save()
-        except OSError:
+        except (OSError, ValueError):
             self._recipes = previous
             raise
 
-    def import_document(self, payload: Any) -> list[dict[str, Any]]:
+    def import_document(self, payload: Any, *, remap_conflicting_indices: bool = False) -> list[dict[str, Any]]:
         imported = self._validated_document(payload)
         imported_ids = {recipe.id for recipe in imported}
         merged = [recipe for recipe in self._recipes if recipe.id not in imported_ids]
         occupied = {recipe.index for recipe in merged}
         for recipe in imported:
             if recipe.index in occupied:
+                if not remap_conflicting_indices:
+                    raise ValueError(f"recipe index is already in use: {recipe.index}; explicit remapping is required")
                 recipe.index = 0
             elif recipe.index:
                 occupied.add(recipe.index)
@@ -263,6 +324,10 @@ class RecipeStore:
 
     def list_recipes(self) -> list[dict[str, Any]]:
         return [recipe.to_dict() for recipe in sorted(self._recipes, key=lambda item: item.index)]
+
+    def recipe_revision(self, recipe_id: str | int) -> str:
+        payload = json.dumps(self.get_recipe(recipe_id).to_dict(), sort_keys=True, ensure_ascii=False, allow_nan=False)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def get_recipe(self, recipe_id: str | int | None = None) -> Recipe:
         if recipe_id:
