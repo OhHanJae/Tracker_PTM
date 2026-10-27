@@ -131,3 +131,139 @@ def test_pinned_recipe_revision_rejects_changed_numeric_mapping(controller):
                                           'expected_recipe_revision': revision})
     assert exc.value.code == 'CONFIG_OR_CAL_ERROR'
     assert controller._pending_motion is None
+
+
+@pytest.mark.parametrize('command,params', [
+    ('motion.jog', {'pan': 'right'}),
+    ('point.goto', {}),
+    ('home.start', {}),
+    ('point.delete', {}),
+    ('recipe.select', {}),
+])
+def test_web_point_move_rejects_competing_commands_until_stop(controller, command, params):
+    recipe = controller.recipe_store.get_recipe()
+    point = controller.recipe_store.upsert_point(recipe.id, name='test', pan=10, tilt=5)
+    moved = controller.command('point.goto', {'recipe_id': recipe.id, 'point_id': point.id, 'laser_after_move': False, 'exclusive': True})
+    before = controller.send.call_count
+    with pytest.raises(HeadlessApiError) as exc:
+        controller.command(command, params)
+    assert exc.value.code == 'BUSY'
+    assert controller.send.call_count == before
+    motion = controller.status()['motion']
+    assert motion['id'] == moved['motion_id']
+    assert motion['command'] == 'point.goto' and motion['automatic'] is False
+    controller.command('motion.stop', {})
+    assert controller.status()['motion']['failed_id'] == moved['motion_id']
+    controller.command('motion.jog', {'pan': 'right'})
+    assert controller.motion_state == 'jog'
+
+
+def completed_test_move(controller):
+    recipe = controller.recipe_store.get_recipe()
+    point = controller.recipe_store.upsert_point(recipe.id, name='test', pan=10, tilt=5)
+    moved = controller.command('point.goto', {'recipe_id': recipe.id, 'point_id': point.id, 'laser_after_move': False})
+    controller.motion_state = 'completed'
+    controller._finish_pending_motion()
+    return {
+        'recipe_id': recipe.id, 'point_id': point.id, 'duration_ms': 1000,
+        'expected_motion_id': moved['motion_id'],
+        'expected_recipe_revision': moved['recipe_revision'],
+        'laser_permit_token': moved['laser_permit_token'],
+    }
+
+
+def test_recipe_test_pulse_accepts_only_the_completed_target(controller):
+    params = completed_test_move(controller)
+    assert controller.command('laser.pulse', params)['laser_on'] is True
+    controller.command('laser.off', {})
+    with pytest.raises(HeadlessApiError) as exc:
+        controller.command('laser.pulse', params)
+    assert exc.value.code == 'LASER_INTERLOCK'
+    assert controller.laser_on is False
+
+
+@pytest.mark.parametrize('command', ['laser.on', 'laser.pulse'])
+def test_stale_test_pulse_cannot_replace_new_manual_output(controller, command):
+    params = completed_test_move(controller)
+    controller.command(command, {} if command == 'laser.on' else {'duration_ms': 5000})
+    deadline = controller._laser_manual_deadline
+    with pytest.raises(HeadlessApiError) as exc:
+        controller.command('laser.pulse', params)
+    assert exc.value.code == 'LASER_INTERLOCK'
+    assert controller.laser_on is True
+    assert controller._laser_manual_deadline == deadline
+
+
+@pytest.mark.parametrize('command', ['recipe.pose_preview', 'recipe.export', 'motion.completion_config', 'motion.tolerance'])
+def test_test_move_allows_read_only_queries(controller, command):
+    recipe = controller.recipe_store.get_recipe()
+    point = controller.recipe_store.upsert_point(recipe.id, name='test', pan=10, tilt=5)
+    moved = controller.command('point.goto', {'recipe_id': recipe.id, 'point_id': point.id,
+        'laser_after_move': False, 'exclusive': True})
+    response = controller.command(command, {'recipe_id': recipe.id} if command.startswith('recipe.') else {})
+    assert response
+    assert controller.status()['motion']['id'] == moved['motion_id']
+
+
+def test_delayed_test_move_is_rejected_after_stop_and_off(controller):
+    recipe = controller.recipe_store.get_recipe()
+    point = controller.recipe_store.upsert_point(recipe.id, name='test', pan=10, tilt=5)
+    before_stop = controller.command('laser.off', {})
+    controller.command('motion.stop', {})
+    controller.command('laser.off', {})
+    controller.send.reset_mock()
+    with pytest.raises(HeadlessApiError) as exc:
+        controller.command('point.goto', {'recipe_id': recipe.id, 'point_id': point.id,
+            'exclusive': True, 'laser_after_move': False, 'laser_permit_token': before_stop['permit_token']})
+    assert exc.value.code == 'LASER_INTERLOCK'
+    assert controller._pending_motion is None
+    controller.send.assert_not_called()
+
+
+def test_idle_stop_alone_cancels_prepared_test_move(controller):
+    recipe = controller.recipe_store.get_recipe()
+    point = controller.recipe_store.upsert_point(recipe.id, name='test', pan=10, tilt=5)
+    permit = controller.command('laser.off', {})['permit_token']
+    controller.command('motion.stop', {'preserve_laser': True})
+    with pytest.raises(HeadlessApiError) as exc:
+        controller.command('point.goto', {'recipe_id': recipe.id, 'point_id': point.id,
+            'exclusive': True, 'laser_after_move': False, 'laser_permit_token': permit})
+    assert exc.value.code == 'LASER_INTERLOCK'
+    assert controller._pending_motion is None
+
+
+@pytest.mark.parametrize('motion', ['point.goto', 'motion.jog'])
+def test_plc_preparation_cannot_extinguish_another_motion_output(controller, motion):
+    controller.command('laser.on', {})
+    recipe = controller.recipe_store.get_recipe()
+    point = controller.recipe_store.upsert_point(recipe.id, name='test', pan=10, tilt=5)
+    controller.command(motion, {'recipe_id': recipe.id, 'point_id': point.id, 'exclusive': True}
+        if motion == 'point.goto' else {'pan': 'right'})
+    generation = controller._laser_generation
+    with pytest.raises(HeadlessApiError) as exc:
+        controller.command('laser.off', {'require_idle': True})
+    assert exc.value.code == 'BUSY'
+    assert controller.laser_on is True
+    assert controller._laser_generation == generation
+    controller.command('motion.stop', {})
+    assert controller.command('laser.off', {'require_idle': True})['laser_on'] is False
+
+
+@pytest.mark.parametrize('change', ['stop', 'jog', 'disconnect', 'recipe', 'selection'])
+def test_stale_test_pulse_cannot_relight_after_external_change(controller, change):
+    params = completed_test_move(controller)
+    if change == 'stop':
+        controller.command('motion.stop', {})
+    elif change == 'jog':
+        controller.command('motion.jog', {'pan': 'right'})
+    elif change == 'disconnect':
+        controller.close()
+    elif change == 'recipe':
+        controller.recipe_store.upsert_point(params['recipe_id'], point_id=params['point_id'], name='edited', pan=20, tilt=5)
+    else:
+        other = controller.recipe_store.upsert_recipe(name='other')
+        controller.command('recipe.select', {'recipe_id': other.id})
+    with pytest.raises(HeadlessApiError) as exc:
+        controller.command('laser.pulse', params)
+    assert exc.value.code in {'STALE_TARGET', 'CONFIG_OR_CAL_ERROR', 'LASER_INTERLOCK'}
+    assert controller.laser_on is False

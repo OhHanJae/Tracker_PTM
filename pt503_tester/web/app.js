@@ -92,6 +92,8 @@ let padRequireCenter = true;
 let selectedPointId = null;
 let recipeTestRunning = false;
 let recipeTestAbort = false;
+let recipeTestCommandPromise = null;
+let recipeTestStopPromise = null;
 let recipeEstimates = new Map();
 let recipeEstimateKey = '';
 let recipeEstimateStatus = '활성 도면과 X/Y 캘리브레이션이 필요합니다.';
@@ -497,9 +499,27 @@ async function request(path, body)
 async function cmd(
     command,
     params = {},
-    quiet = false
+    quiet = false,
+    recipeTestOwned = false
 )
 {
+    if (recipeTestRunning && !recipeTestOwned)
+    {
+        const drawingMutation = command.startsWith('drawing.') && ![
+            'drawing.list', 'drawing.get', 'drawing.export',
+            'drawing.estimate_pan_tilt', 'drawing.estimate_xy', 'drawing.estimate_recipe'
+        ].includes(command);
+        if (['motion.stop', 'motion.force_stop', 'laser.off', 'serial.disconnect'].includes(command))
+        {
+            const stopped = await stopRecipePointTest();
+            if (command === 'motion.stop' || command === 'laser.off') return stopped;
+        }
+        else if ((drawingMutation || /^(motion\.|home\.|point\.(goto|upsert|delete|reorder|select)|recipe\.(create|update|upsert|delete|import|select)|laser\.(on|pulse|state|settings)|serial\.(connect|scan)|raw\.send)/.test(command))
+            && !(command === 'motion.completion_config' && Object.keys(params).length === 0))
+        {
+            throw Error('포인트 테스트 중에는 수동 조작과 레시피 변경을 할 수 없습니다. 테스트를 먼저 정지하세요.');
+        }
+    }
     if (['drawing.point_upsert', 'drawing.calibrate', 'drawing.reset_calibration',
          'drawing.estimate_pan_tilt', 'drawing.estimate_xy'].includes(command) &&
         params.drawing_id === activeDrawing?.id && activeDrawing?.selected_recipe_id)
@@ -1202,6 +1222,7 @@ async function stopJog(preserveLaserManual = false)
     padRequireCenter =
         true;
 
+    if (recipeTestRunning) return stopRecipePointTest();
 
     // A JOG POST may already be in flight.  Let it finish first so an older
     // motion request cannot arrive at the server after STOP.
@@ -1275,7 +1296,7 @@ document
                     event.preventDefault();
 
                     if (
-                        !status.serial?.connected
+                        !status.serial?.connected || recipeTestRunning
                     )
                     {
                         return;
@@ -1304,7 +1325,7 @@ document
         // arbitration even while the operator is still holding the control.
         element.addEventListener(
             'pointerup',
-            guarded(() => stopJog(true))
+            guarded(() => { if (!recipeTestRunning || jog) return stopJog(true); })
         );
     });
 
@@ -1391,6 +1412,8 @@ window.addEventListener(
 
     () => {
 
+        recipeTestAbort = true;
+
         navigator.sendBeacon(
 
             '/api/command',
@@ -1412,6 +1435,10 @@ window.addEventListener(
                 }
             )
         );
+        navigator.sendBeacon('/api/command', new Blob(
+            [JSON.stringify({command: 'laser.off', params: {}})],
+            {type: 'application/json'}
+        ));
     }
 );
 
@@ -1802,7 +1829,8 @@ function requestRecipeEstimates()
 function enabledRecipePoints(recipe = selected())
 {
     return (recipe?.points || [])
-        .filter(point => point.enabled);
+        .filter(point => point.enabled)
+        .sort((left, right) => Number(left.order) - Number(right.order));
 }
 
 
@@ -1858,7 +1886,8 @@ function updateRecipeTestButtons()
         of [
             'runRecipeSequence',
             'runRecipeRandom',
-            'recipeTestLaserMs'
+            'recipeTestLaserMs',
+            'recipeSelect'
         ]
     )
     {
@@ -1920,21 +1949,21 @@ async function waitForRecipeMotion(motionId)
         if (recipeTestAbort) return;
         const motion = status.motion;
         if (!motion) throw Error('이동 상태를 확인할 수 없습니다.');
-        if (motion.failed_id === motionId || ['fault', 'timeout', 'stopped'].includes(motion.state))
+        if (motion.failed_id === motionId || ['fault', 'timeout', 'stopped', 'jog', 'homing', 'communication_error', 'communication_timeout'].includes(motion.state))
         {
             throw Error(motion.last_error || '포인트 이동이 중단되었습니다.');
         }
 
 
+        if (motion.id && motion.id !== motionId)
+        {
+            throw Error('다른 이동 명령이 포인트 테스트를 대체했습니다.');
+        }
         if (
             motion.completed_id === motionId
         )
         {
             break;
-        }
-        if (motion.id && motion.id !== motionId)
-        {
-            throw Error('다른 이동 명령이 포인트 테스트를 대체했습니다.');
         }
         await sleep(50);
     }
@@ -1949,7 +1978,19 @@ async function waitForRecipeMotion(motionId)
 }
 
 
-async function moveRecipeTestPoint(recipe, point, label, laserDurationMs)
+async function recipeTestCommand(command, params = {}, quiet = false)
+{
+    const pending = cmd(command, params, quiet, true);
+    recipeTestCommandPromise = pending;
+    try { return await pending; }
+    finally
+    {
+        if (recipeTestCommandPromise === pending) recipeTestCommandPromise = null;
+    }
+}
+
+
+async function moveRecipeTestPoint(recipe, point, label, laserDurationMs, expectedRecipeRevision)
 {
     selectedPointId =
         point.id;
@@ -1960,11 +2001,11 @@ async function moveRecipeTestPoint(recipe, point, label, laserDurationMs)
 
     setRecipeTestStatus(label + ' · ' + pointLabel(point));
 
-    const off = await cmd('laser.off', {}, true);
+    const off = await recipeTestCommand('laser.off', {}, true);
     if (off.laser_on !== false) throw Error('레이저 OFF를 확인하지 못했습니다.');
     if (recipeTestAbort) return;
 
-    const result = await cmd(
+    const result = await recipeTestCommand(
         'point.goto',
 
         {
@@ -1973,7 +2014,10 @@ async function moveRecipeTestPoint(recipe, point, label, laserDurationMs)
 
             point_id:
                 point.id,
-            laser_after_move: false
+            laser_after_move: false,
+            exclusive: true,
+            laser_permit_token: off.permit_token,
+            expected_recipe_revision: expectedRecipeRevision ?? recipe.revision
         }
     );
 
@@ -1985,20 +2029,51 @@ async function moveRecipeTestPoint(recipe, point, label, laserDurationMs)
     try
     {
         // 서버 타이머로 브라우저 연결이 끊겨도 조사 시간이 지나면 소등한다.
-        const laser = await cmd('laser.pulse', {duration_ms: laserDurationMs}, true);
+        const laser = await recipeTestCommand('laser.pulse', {
+            duration_ms: laserDurationMs,
+            expected_motion_id: result.motion_id,
+            expected_recipe_revision: result.recipe_revision ?? recipe.revision,
+            laser_permit_token: result.laser_permit_token,
+            recipe_id: recipe.id,
+            point_id: point.id
+        }, true);
         if (laser.laser_on !== true) throw Error('레이저 ON을 확인하지 못했습니다.');
         setRecipeTestStatus(label + ' · ' + pointLabel(point) + ` · 레이저 ON ${laserDurationMs} ms`);
         const deadline = Date.now() + laserDurationMs;
+        let nextRefresh = Date.now() + 200;
         while (!recipeTestAbort && Date.now() < deadline)
         {
             await sleep(Math.min(50, deadline - Date.now()));
+            if (recipeTestAbort) break;
+            if (Date.now() >= nextRefresh)
+            {
+                await refreshOnce();
+                nextRefresh = Date.now() + 200;
+            }
+            const motion = status.motion;
+            if (!motion || ['fault', 'timeout', 'stopped', 'jog', 'homing', 'communication_error', 'communication_timeout'].includes(motion.state)
+                || motion.failed_id === result.motion_id
+                || (motion.id && motion.id !== result.motion_id)
+                || motion.completed_id !== result.motion_id)
+            {
+                throw Error('이동 상태가 변경되어 포인트 테스트를 중단합니다.');
+            }
+            if (status.laser?.manual_allowed === false)
+            {
+                throw Error('레이저 사용 차단: ' + (status.laser.manual_block_reason || 'PLC 모드 또는 인터록이 변경되었습니다.'));
+            }
+            if (result.recipe_revision != null && status.selected_recipe_revision !== result.recipe_revision)
+            {
+                throw Error('레시피가 변경되어 포인트 테스트를 중단합니다.');
+            }
         }
     }
     finally
     {
-        const stopped = await cmd('laser.off', {}, true);
+        const stopped = await recipeTestCommand('laser.off', {}, true);
         if (stopped.laser_on !== false) throw Error('레이저 OFF를 확인하지 못했습니다.');
     }
+    return result.recipe_revision;
 }
 
 
@@ -2019,6 +2094,11 @@ async function runRecipePointTest(mode)
     if (recipeTestRunning)
     {
         return;
+    }
+
+    if (jog || jogBusy || jogStopBusy || padActive)
+    {
+        throw Error('수동 운전을 정지한 후 테스트를 시작하세요.');
     }
 
 
@@ -2046,12 +2126,6 @@ async function runRecipePointTest(mode)
         throw Error('조사 시간은 50~60000 ms 범위의 정수로 입력하세요.');
     }
 
-    if (recipe.product_rotation_deg || recipe.product_tilt_deg)
-    {
-        await cmd('recipe.pose_preview', {recipe_id: recipe.id}, true);
-    }
-
-
     recipeTestRunning =
         true;
 
@@ -2064,16 +2138,31 @@ async function runRecipePointTest(mode)
         mode === 'sequence'
             ? '순차 테스트 완료'
             : '랜덤 반복 정지';
+    let testStarted = false;
+    let testFailed = false;
+    let testRecipeRevision;
 
 
     try
     {
+        if (recipe.product_rotation_deg || recipe.product_tilt_deg)
+        {
+            await recipeTestCommand('recipe.pose_preview', {recipe_id: recipe.id}, true);
+        }
+        if (recipeTestAbort) return;
         const testStatus = await cmd('system.status', {}, true);
+        if (recipeTestAbort) return;
+        if (testStatus.serial?.connected !== true || !testStatus.motion || testStatus.motion.id
+            || ['tracking', 'jog', 'homing'].includes(testStatus.motion?.state))
+        {
+            throw Error('장치 연결과 진행 중인 이동을 확인한 후 테스트를 시작하세요.');
+        }
         if (testStatus.laser?.manual_allowed === false)
         {
             throw Error('레이저 사용 차단: ' + (testStatus.laser.manual_block_reason
                 || 'Core의 현재 알람, 강제정지, 체결 후 재점등 제한을 확인하세요.'));
         }
+        testStarted = true;
         if (
             mode === 'sequence'
         )
@@ -2084,11 +2173,12 @@ async function runRecipePointTest(mode)
                 index += 1
             )
             {
-                await moveRecipeTestPoint(
+                testRecipeRevision = await moveRecipeTestPoint(
                     recipe,
                     points[index],
                     `순차 ${index + 1}/${points.length}`,
-                    laserDurationMs
+                    laserDurationMs,
+                    testRecipeRevision
                 );
             }
         }
@@ -2125,11 +2215,12 @@ async function runRecipePointTest(mode)
                 count += 1;
 
 
-                await moveRecipeTestPoint(
+                testRecipeRevision = await moveRecipeTestPoint(
                     recipe,
                     points[index],
                     `랜덤 ${count}`,
-                    laserDurationMs
+                    laserDurationMs,
+                    testRecipeRevision
                 );
             }
         }
@@ -2137,6 +2228,7 @@ async function runRecipePointTest(mode)
 
     catch (error)
     {
+        testFailed = true;
         finalStatus =
             '테스트 오류: '
             + error.message;
@@ -2146,26 +2238,27 @@ async function runRecipePointTest(mode)
 
     finally
     {
-        if (
-            recipeTestAbort
-        )
+        try
         {
-            finalStatus =
-                '테스트 정지';
+            if (testStarted && (recipeTestAbort || testFailed)) await stopRecipePointTest();
+            else if (recipeTestStopPromise) await recipeTestStopPromise;
         }
-
-
-        recipeTestRunning =
-            false;
-
-        recipeTestAbort =
-            false;
-
-        updateRecipeTestButtons();
-
-        setRecipeTestStatus(
-            finalStatus
-        );
+        catch (error)
+        {
+            finalStatus = '테스트 정지 오류: ' + error.message;
+            throw error;
+        }
+        finally
+        {
+            if (recipeTestAbort && !testFailed && !finalStatus.startsWith('테스트 정지 오류:'))
+            {
+                finalStatus = '테스트 정지';
+            }
+            recipeTestRunning = false;
+            recipeTestAbort = false;
+            updateRecipeTestButtons();
+            setRecipeTestStatus(finalStatus);
+        }
     }
 }
 
@@ -2184,11 +2277,32 @@ async function stopRecipePointTest()
     }
 
 
-    await cmd(
-        'motion.stop',
-        {},
-        true
-    );
+    if (recipeTestStopPromise) return recipeTestStopPromise;
+    const pending = recipeTestCommandPromise;
+    recipeTestStopPromise = (async () => {
+        // Stop immediately, then repeat after an already submitted move/pulse.
+        // A late HTTP response must not leave motion or illumination restarted.
+        let stopped = {};
+        let stopError = null;
+        try { stopped = await cmd('motion.stop', {}, true, true); }
+        catch (error) { stopError = error; }
+        if (pending)
+        {
+            await pending.catch(() => {});
+            try
+            {
+                stopped = await cmd('motion.stop', {}, true, true);
+                stopError = null;
+            }
+            catch (error) { stopError = error; }
+        }
+        const off = await cmd('laser.off', {}, true, true);
+        if (off.laser_on !== false) throw Error('레이저 OFF를 확인하지 못했습니다.');
+        if (stopError) throw stopError;
+        return {...stopped, laser_on: false};
+    })();
+    try { return await recipeTestStopPromise; }
+    finally { recipeTestStopPromise = null; }
 }
 
 
@@ -7583,6 +7697,11 @@ function pollGamepad()
     if (stops.length)
     {
         if (stops.some(key => !previous[key]) || padActive) guarded(stopJog)();
+        padRequireCenter = true;
+        return;
+    }
+    if (recipeTestRunning)
+    {
         padRequireCenter = true;
         return;
     }

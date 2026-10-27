@@ -1091,6 +1091,9 @@ class HeadlessController:
                     "manual_jog_token_supported": True,
                     "state": self.motion_state,
                     "id": self._pending_motion.get("motion_id") if self._pending_motion else None,
+                    "command": self._pending_motion.get("command") if self._pending_motion else None,
+                    "automatic": self._pending_motion.get("automatic", False) if self._pending_motion else False,
+                    "exclusive": self._pending_motion.get("exclusive", False) if self._pending_motion else False,
                     "completed_id": self._completed_motion_id,
                     "failed_id": self._failed_motion_id,
                     "last_error": self._last_motion_error,
@@ -1682,10 +1685,13 @@ class HeadlessController:
             if command in {"point.goto", "motion.goto"} and self.recipe_store.storage_error:
                 raise HeadlessApiError("RECIPE_STORAGE_ERROR", self.recipe_store.storage_error)
             pending = self._pending_motion
-            if pending and pending.get("automatic") and (
+            if pending and (pending.get("automatic") or pending.get("exclusive")) and (
                     command.startswith(("motion.", "home.", "preset.", "scan.", "cruise.", "pattern.", "recipe.", "point.", "drawing."))
-                    and command not in {"motion.stop", "motion.force_stop", "recipe.list", "recipe.get", "point.list", "drawing.list", "drawing.get"}):
-                raise HeadlessApiError("BUSY", "automatic movement owns the motion and recipe until completion")
+                    and command not in {"motion.stop", "motion.force_stop", "recipe.list", "recipe.get", "recipe.pose_preview",
+                                        "recipe.export", "point.list", "drawing.list", "drawing.get", "drawing.estimate_recipe",
+                                        "drawing.estimate_xy", "drawing.estimate_pan_tilt"}
+                    and not (command in {"motion.completion_config", "motion.tolerance"} and not params)):
+                raise HeadlessApiError("BUSY", "point movement owns the motion and recipe until completion; stop it before another command")
             manual_off_error = None
             if (command.startswith(("motion.", "home.", "preset.", "scan.", "cruise.", "pattern.",
                                     "pelco.", "lens.", "aux.", "camera.", "maintenance.", "zero."))
@@ -1737,6 +1743,7 @@ class HeadlessController:
                 return {"recipe_id": recipe_id, "point_id": point.id, "name": point.name}
             if command in {"motion.goto", "point.goto"}:
                 automatic = self._bool(params, "require_homed", False)
+                exclusive = self._bool(params, "exclusive", False)
                 if automatic and not self._home_valid:
                     raise HeadlessApiError("HOMING_REQUIRED", "HOME is required before automatic point movement")
                 if automatic and self._active_jog is not None:
@@ -1751,8 +1758,6 @@ class HeadlessController:
                 point = self.recipe_store.get_point(recipe_id, point_id)
                 if not point.enabled:
                     raise HeadlessApiError("DISABLED", "point is disabled")
-                self._selected_recipe_id = recipe_id
-                self._selected_point_id = point_id
                 target, correction = self._recipe_motion_target(recipe_id, point)
                 recipe = self.recipe_store.get_recipe(recipe_id)
                 if automatic and point.drawing_point_id and not recipe.drawing.get("calibration"):
@@ -1762,6 +1767,8 @@ class HeadlessController:
                 if expected_revision is not None and expected_revision != revision:
                     raise HeadlessApiError("CONFIG_OR_CAL_ERROR", "recipe changed during production; stop and review the mapping")
                 with self._laser_lock:
+                    if exclusive and "laser_permit_token" in params and params["laser_permit_token"] != self._laser_generation:
+                        raise HeadlessApiError("LASER_INTERLOCK", "test movement was cancelled before dispatch")
                     auto_laser = (self._bool(params, "laser_after_move", True)
                                   and not self._laser_manual_deadline
                                   and not self._power_saving and not self._laser_automatic_off
@@ -1773,6 +1780,8 @@ class HeadlessController:
                             and (self._laser_backend == "gpio" or self.laser_connected)):
                         self._laser_write_coil(False)
                     laser_generation = self._laser_generation
+                self._selected_recipe_id = recipe_id
+                self._selected_point_id = point_id
                 result = self.command(
                     "motion.absolute",
                     target,
@@ -1783,6 +1792,7 @@ class HeadlessController:
                     self._pending_motion.update(
                         command=command, recipe_id=recipe_id, point_id=point_id,
                         automatic=automatic, recipe_revision=revision,
+                        exclusive=exclusive,
                         laser_after_move=auto_laser, laser_generation=laser_generation,
                     )
                 return {
@@ -1791,6 +1801,7 @@ class HeadlessController:
                     "point_id": point_id,
                     "pose_correction": correction,
                     "recipe_revision": revision,
+                    "laser_permit_token": laser_generation,
                 }
             if command == "home.start":
                 self._home_valid = False
@@ -1907,6 +1918,10 @@ class HeadlessController:
                     "jog_token": token,
                 }
             if command in {"motion.stop", "cruise.stop", "scan.stop"}:
+                with self._laser_lock:
+                    # An idle STOP must also cancel test moves prepared before it.
+                    if not self._laser_manual_deadline and not self._laser_active_state:
+                        self._laser_generation += 1
                 self._axis_target = None
                 self._axis_target_motion_id = None
                 self._jog_next_resend = 0.0
@@ -1961,6 +1976,9 @@ class HeadlessController:
                 )
                 self.motion_state = "stopped"
             if command in {"laser.off", "laser.on"}:
+                if (command == "laser.off" and self._bool(params, "require_idle", False)
+                        and (self._pending_motion is not None or self._active_jog is not None)):
+                    raise HeadlessApiError("BUSY", "another motion owns the device")
                 with self._laser_lock:
                     self._laser_active_state = None
                     self._laser_blink_next = 0.0
@@ -1975,8 +1993,25 @@ class HeadlessController:
             if command == "laser.pulse":
                 if self._pending_motion is not None:
                     raise HeadlessApiError("MOTION_ACTIVE", "Laser remains OFF until movement completes")
+                if "expected_motion_id" in params:
+                    motion_id = params["expected_motion_id"]
+                    if (not isinstance(motion_id, str) or not motion_id
+                            or self.motion_state != "completed"
+                            or motion_id != self._completed_motion_id
+                            or motion_id != self._axis_target_motion_id):
+                        raise HeadlessApiError("STALE_TARGET", "test movement was stopped or superseded")
+                    if (str(params.get("recipe_id", self._selected_recipe_id)) != self._selected_recipe_id
+                            or str(params.get("point_id", self._selected_point_id)) != self._selected_point_id):
+                        raise HeadlessApiError("STALE_TARGET", "test target selection changed")
+                if "expected_recipe_revision" in params:
+                    if (self.recipe_store.storage_error or not self._selected_recipe_id
+                            or params["expected_recipe_revision"] != self.recipe_store.recipe_revision(self._selected_recipe_id)):
+                        raise HeadlessApiError("CONFIG_OR_CAL_ERROR", "recipe changed during test movement")
                 duration = self._int(params, "duration_ms", 500, minimum=50, maximum=60000)
                 with self._laser_lock:
+                    if "laser_permit_token" in params and params["laser_permit_token"] != self._laser_generation:
+                        raise HeadlessApiError("LASER_INTERLOCK", "test laser permission was changed or cancelled")
+                    self._laser_generation += 1
                     self._laser_active_state = None
                     self._laser_blink_next = 0.0
                     self._laser_deadline = time.monotonic() + duration / 1000
@@ -2585,6 +2620,7 @@ class HeadlessController:
                                        + self._laser_manual_block_reason)
             if self.laser_bypass:
                 raise HeadlessApiError("LASER_BYPASSED", "Laser output is disabled by bypass mode")
+            self._laser_generation += 1
             self._laser_manual_deadline = time.monotonic() + 1800.0
             return self._laser_write_coil(True)
         if command == "laser.off":

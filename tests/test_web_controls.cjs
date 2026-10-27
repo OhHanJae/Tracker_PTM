@@ -31,6 +31,7 @@ const {chromium} = require('playwright');
             const {command, params} = route.request().postDataJSON();
             if (command === 'system.commands') return json({commands: commandNames});
             if (command === 'serial.ports') return json({ports: []});
+            if (command === 'laser.off') return json({laser_on: false});
             if (command === 'recipe.list') return json({recipes: []});
             if (command === 'drawing.list') return json({drawings: drawingList});
             if (command === 'drawing.get') return json({drawing: {
@@ -201,6 +202,24 @@ const {chromium} = require('playwright');
             await page.setViewportSize({width, height: 1000});
             assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
         }
+        await clear();
+        await page.evaluate(() => {
+            recipeTestRunning = true;
+            recipeTestAbort = false;
+            updateRecipeTestButtons();
+        });
+        assert.equal(await page.locator('#runRecipeSequence').isDisabled(), true);
+        assert.equal(await page.locator('#recipeSelect').isDisabled(), true);
+        assert.match(await page.evaluate(() => cmd('point.goto', {}).catch(error => error.message)), /테스트를 먼저 정지/);
+        assert.equal((await sent('point.goto')).length, 0, 'competing point commands never leave the browser');
+        assert.match(await page.evaluate(() => cmd('drawing.export_recipe', {}).catch(error => error.message)), /테스트를 먼저 정지/);
+        assert.equal((await sent('drawing.export_recipe')).length, 0, 'drawing changes cannot mutate the test recipe');
+        assert.ok(Array.isArray((await page.evaluate(() => cmd('drawing.list', {}, true))).drawings), 'readonly drawing lists remain available');
+        await page.evaluate(() => stopJog());
+        assert.equal(await page.evaluate(() => recipeTestAbort), true, 'ordinary STOP also aborts an active recipe test');
+        assert.equal((await sent('motion.stop')).length, 1);
+        assert.equal((await sent('laser.off')).length, 1);
+        await page.evaluate(() => { recipeTestRunning = false; recipeTestAbort = false; updateRecipeTestButtons(); });
         drawingList = [];
         await page.reload();
         await page.waitForFunction(() => window.sent.some(item => item.command === 'drawing.list'));
