@@ -7,26 +7,69 @@ const code = source.slice(source.indexOf('async function waitForRecipeMotion('),
 
 function runtime() {
     let now = 0;
+    let timerId = 0;
+    const timers = new Map();
     const duration = {value: '1000'};
     const ctx = {
         Date: {now: () => now}, Math,
+        AbortController,
+        setTimeout(callback, ms) {const id = ++timerId; timers.set(id, {callback, at: now + ms}); return id;},
+        clearTimeout(id) {timers.delete(id);},
+        async advance(ms) {
+            now += ms;
+            for (const [id, timer] of [...timers]) {
+                if (timer.at > now || !timers.delete(id)) continue;
+                timer.callback();
+            }
+            for (let count = 0; count < 8; count++) await Promise.resolve();
+        },
         status: {serial: {connected: true}, motion: {completion: {timeout_s: 1}}, selected_recipe_revision: 7},
         recipeTestRunning: false, recipeTestAbort: false,
         recipeTestCommandPromise: null, recipeTestStopPromise: null,
+        recipeTestSession: null, activeToken: null, sessionEvents: [],
+        localManualOutput: false,
         jog: null, jogBusy: false, jogStopBusy: false, padActive: false,
         selectedPointId: null, calls: [], sleeps: [], labels: [], events: [], laserOn: false, permitToken: 0,
         $: id => id === 'recipeTestLaserMs' ? duration : null,
         renderPoints() {}, updateRecipeTestButtons() {},
         setRecipeTestStatus(label) {ctx.labels.push(label);},
         pointLabel: point => point.id,
-        async sleep(ms) {ctx.sleeps.push(ms); ctx.events.push(['wait', ms]); now += ms;},
+        async sleep(ms) {ctx.sleeps.push(ms); ctx.events.push(['wait', ms]); await ctx.advance(ms);},
         async refreshOnce() {
             ctx.events.push(['completed', ctx.motionId]);
             ctx.status.motion = {state: 'completed', completed_id: ctx.motionId};
         },
         async cmd(command, params) {
             if (command === 'system.status') return ctx.status;
+            if (command === 'test.start') {
+                if (ctx.status.serial?.connected !== true || !ctx.status.motion || ctx.status.motion.id
+                    || ['jog', 'tracking', 'homing'].includes(ctx.status.motion.state)) throw Error('장치 연결과 진행 중인 이동을 확인하세요.');
+                if (ctx.status.laser?.manual_allowed === false) throw Error(ctx.status.laser.manual_block_reason);
+                assert.equal(ctx.activeToken, null);
+                ctx.activeToken = 'test-' + (ctx.sessionEvents.length + 1);
+                ctx.sessionEvents.push(['start', ctx.activeToken]);
+                return {test_token: ctx.activeToken, lease_ms: 5000, recipe_revision: 7};
+            }
+            if (command === 'test.renew') {
+                assert.equal(params.test_token, ctx.activeToken);
+                ctx.sessionEvents.push(['renew', params.test_token]);
+                return {accepted: true, lease_ms: 5000};
+            }
+            if (command === 'test.stop') {
+                ctx.sessionEvents.push(['stop', params.test_token]);
+                if (params.test_token !== ctx.activeToken) return {accepted: false, stopped: false};
+                ctx.activeToken = null;
+                ctx.events.push(['stop'], ['off']);
+                ctx.laserOn = false;
+                ctx.status.motion = {state: 'stopped'};
+                return {accepted: true, stopped: true, laser_on: false};
+            }
+            if (params.test_token && params.test_token !== ctx.activeToken) throw Error('TEST_SESSION_EXPIRED');
+            if (ctx.activeToken && ['point.goto', 'laser.off', 'laser.pulse'].includes(command)) {
+                assert.equal(params.test_token, ctx.activeToken, 'every test mutation carries the owning session token');
+            }
             if (command === 'motion.stop') {
+                ctx.activeToken = null;
                 ctx.events.push(['stop']);
                 ctx.status.motion = {state: 'stopped'};
                 return {stopped: true};
@@ -69,8 +112,16 @@ function runtime() {
 function installRealCommand(ctx) {
     const command = ctx.cmd;
     const notice = {dataset: {}};
-    ctx.$ = id => id === 'notice' ? notice : id === 'recipeTestLaserMs' ? {value: '1000'} : null;
-    ctx.request = async (_path, body) => command(body.command, body.params);
+    const duration = ctx.$('recipeTestLaserMs');
+    ctx.$ = id => id === 'notice' ? notice : id === 'recipeTestLaserMs' ? duration : null;
+    ctx.request = async (_path, body, signal) => {
+        const pending = command(body.command, body.params);
+        if (!signal) return pending;
+        return Promise.race([pending, new Promise((_resolve, reject) => {
+            if (signal.aborted) return reject(Error('aborted'));
+            signal.addEventListener('abort', () => reject(Error('aborted')), {once: true});
+        })]);
+    };
     ctx.log = () => {};
     ctx.drawingActionBusy = false;
     ctx.activeDrawing = null;
@@ -93,8 +144,12 @@ function deferred() {
         ['wait', 50], ['wait', 50], ['wait', 25], ['off'],
         ['off'], ['move', '2'], ['completed', 'motion-2'], ['on', 125],
         ['wait', 50], ['wait', 50], ['wait', 25], ['off'],
+        ['stop'], ['off'],
     ], 'each point completes, illuminates for the configured duration, then turns OFF before the next move');
     assert.equal(ctx.laserOn, false, 'sequence ends with laser OFF');
+    assert.equal(ctx.labels.at(-1), '순차 테스트 완료');
+    assert.equal(ctx.recipeTestSession, null);
+    assert.deepEqual(ctx.sessionEvents.map(event => event[0]), ['start', 'stop'], 'one session spans both points and the gap');
 
     ctx = runtime();
     ctx.refreshOnce = async () => {
@@ -199,6 +254,7 @@ function deferred() {
     };
     const sequence = ctx.runRecipePointTest('sequence');
     assert.equal(ctx.recipeTestRunning, true, 'preparation reserves the run before its first await');
+    for (let count = 0; count < 8; count++) await Promise.resolve();
     await ctx.runRecipePointTest('random');
     assert.equal(previews, 1, 'double click cannot start a second test during pose preview');
     preview.resolve();
@@ -243,11 +299,6 @@ function deferred() {
             if (name === blockedCommand) {
                 entered.resolve();
                 await release.promise;
-                if (name === 'laser.pulse') {
-                    ctx.events.push(['on', params.duration_ms]);
-                    ctx.laserOn = true;
-                    return {laser_on: true};
-                }
             }
             return actualCommand(name, params);
         };
@@ -260,12 +311,10 @@ function deferred() {
         assert.equal(ctx.recipeTestRunning, true, 'new tests stay locked while stop is pending');
         release.resolve();
         await Promise.all([running, stopping]);
-        const lastStop = ctx.events.map(event => event[0]).lastIndexOf('stop');
-        const oldAction = ctx.events.map(event => event[0]).lastIndexOf(blockedCommand === 'point.goto' ? 'move' : 'on');
-        assert.ok(lastStop > oldAction, 'late ' + blockedCommand + ' is followed by STOP');
+        assert.equal(ctx.events.some(event => event[0] === 'on'), false, 'a cancelled token can never illuminate');
         assert.equal(ctx.laserOn, false);
         assert.equal(ctx.events.at(-1)[0], 'off');
-        assert.equal(ctx.calls.length, 1);
+        assert.equal(ctx.calls.length, blockedCommand === 'point.goto' ? 0 : 1, 'late requests with the ended token are rejected');
     }
 
     for (const change of ['motion', 'policy', 'revision']) {
@@ -328,7 +377,7 @@ function deferred() {
     const beacons = [];
     let leave;
     const leaveContext = {
-        recipeTestAbort: false, Blob,
+        recipeTestAbort: false, recipeTestSession: null, localManualOutput: false, status: {}, Blob,
         window: {addEventListener: (_event, callback) => { leave = callback; }},
         navigator: {sendBeacon: (_path, blob) => beacons.push(blob)},
     };
@@ -337,8 +386,130 @@ function deferred() {
     vm.runInNewContext(source.slice(leaveStart, source.indexOf('let refreshTimer = null;', leaveStart)), leaveContext);
     leave();
     assert.equal(leaveContext.recipeTestAbort, true);
+    assert.equal(beacons.length, 0, 'closing an idle observer page never sends global STOP');
+    leaveContext.localManualOutput = true;
+    leave();
     assert.deepEqual(await Promise.all(beacons.map(async blob => JSON.parse(await blob.text()).command)),
         ['motion.stop', 'laser.off'], 'leaving invalidates both delayed moves and laser pulses');
+    assert.ok((await Promise.all(beacons.map(async blob => JSON.parse(await blob.text()).params.if_no_test_session))).every(Boolean),
+        'stale manual pages only stop outputs when no newer test is active');
+    beacons.length = 0;
+    leaveContext.recipeTestSession = {token: 'old-test'};
+    leave();
+    assert.deepEqual(JSON.parse(await beacons[0].text()), {command: 'test.stop', params: {test_token: 'old-test'}});
+    assert.equal(beacons.length, 1, 'leaving an owned test never sends a global STOP that could affect a newer session');
+    beacons.length = 0;
+    leaveContext.recipeTestSession = null;
+    leaveContext.status = {operation: {test_active: true}};
+    leave();
+    assert.equal(beacons.length, 0, 'leaving an observer page does not stop another test');
 
-    console.log('PASS: sequence/random ordering and collision regressions: double start, manual commands, PLC replacement, in-flight STOP, dwell changes, OFF failures');
+    ctx = runtime();
+    await ctx.runRecipePointTest('sequence');
+    assert.ok(ctx.sessionEvents.some(event => event[0] === 'renew'), 'lease stays alive through movement and illumination');
+    assert.equal(new Set(ctx.sessionEvents.map(event => event[1])).size, 1, 'renew and cleanup use the same token');
+
+    for (const failure of ['reject', 'hang']) {
+        ctx = runtime();
+        ctx.enabledRecipePoints = () => [{id: '1'}];
+        ctx.$('recipeTestLaserMs').value = failure === 'hang' ? '6000' : '2000';
+        const liveCommand = ctx.cmd;
+        ctx.cmd = async (name, params) => {
+            if (name === 'test.renew') {
+                if (failure === 'hang') return new Promise(() => {});
+                throw Error('renew offline');
+            }
+            return liveCommand(name, params);
+        };
+        installRealCommand(ctx);
+        await assert.rejects(ctx.runRecipePointTest('sequence'), /연결 유지/);
+        assert.equal(ctx.recipeTestRunning, false, failure + ' renew releases the local execution lock');
+        assert.equal(ctx.recipeTestSession, null);
+        assert.equal(ctx.laserOn, false);
+        ctx.$('recipeTestLaserMs').value = '50';
+        await ctx.runRecipePointTest('sequence');
+        assert.equal(ctx.recipeTestRunning, false, 'another run is possible after timeout cleanup');
+    }
+
+    ctx = runtime();
+    const started = deferred();
+    const startReply = deferred();
+    const startCommand = ctx.cmd;
+    ctx.cmd = async (name, params) => {
+        if (name === 'test.start') { started.resolve(); await startReply.promise; }
+        return startCommand(name, params);
+    };
+    const preparing = ctx.runRecipePointTest('sequence');
+    await started.promise;
+    const cancelPreparation = ctx.stopRecipePointTest();
+    startReply.resolve();
+    await Promise.all([preparing, cancelPreparation]);
+    assert.deepEqual(ctx.calls, [], 'STOP during reservation prevents the first move');
+    assert.equal(ctx.activeToken, null, 'a late start token is still cancelled');
+    assert.equal(ctx.recipeTestRunning, false);
+
+    ctx = runtime();
+    ctx.activeToken = 'new-session';
+    ctx.recipeTestSession = {token: 'old-session', controller: new AbortController()};
+    installRealCommand(ctx);
+    const stale = await ctx.stopRecipePointTest();
+    assert.equal(stale.accepted, false);
+    assert.equal(ctx.activeToken, 'new-session');
+    assert.deepEqual(ctx.events, [], 'stale cleanup never falls back to untokened STOP or OFF');
+
+    ctx = runtime();
+    ctx.activeToken = 'new-session';
+    ctx.recipeTestSession = {token: 'old-session', controller: new AbortController()};
+    installRealCommand(ctx);
+    const operatorStop = await ctx.stopRecipePointTest({operator: true});
+    assert.equal(operatorStop.laser_on, false);
+    assert.equal(ctx.activeToken, null, 'an explicit operator STOP also cancels a newer active session');
+    assert.deepEqual(ctx.events, [['stop'], ['off']]);
+
+    ctx = runtime();
+    const failedOperatorStop = ctx.cmd;
+    ctx.cmd = async (name, params) => {
+        if (name === 'motion.stop') throw Error('operator STOP failed');
+        return failedOperatorStop(name, params);
+    };
+    installRealCommand(ctx);
+    await assert.rejects(ctx.stopOperatorOutputs(), /operator STOP failed/);
+    assert.deepEqual(ctx.events, [['off']], 'an explicit STOP transport failure still attempts laser OFF separately');
+
+    ctx = runtime();
+    ctx.status.operation = {mode: 'testing', test_active: true};
+    await assert.rejects(ctx.runRecipePointTest('sequence'), /다른 포인트 테스트/);
+    assert.equal(ctx.recipeTestRunning, false, 'an observer cannot start a competing local run');
+
+    ctx = runtime();
+    const startNeverReplies = deferred();
+    ctx.cmd = async (name) => {
+        if (name === 'test.start') { startNeverReplies.resolve(); return new Promise(() => {}); }
+        throw Error('unexpected command');
+    };
+    installRealCommand(ctx);
+    const noStartReply = ctx.runRecipePointTest('sequence');
+    await startNeverReplies.promise;
+    await ctx.advance(5001);
+    await assert.rejects(noStartReply, /시작 응답/);
+    assert.equal(ctx.recipeTestRunning, false);
+    assert.equal(ctx.recipeTestSession, null, 'a lost reservation reply cannot hold the local lock forever');
+
+    ctx = runtime();
+    ctx.$('recipeTestLaserMs').value = '50';
+    const stopNeverReplies = deferred();
+    const normalCommand = ctx.cmd;
+    ctx.cmd = async (name, params) => {
+        if (name === 'test.stop') { stopNeverReplies.resolve(); return new Promise(() => {}); }
+        return normalCommand(name, params);
+    };
+    installRealCommand(ctx);
+    const noStopReply = ctx.runRecipePointTest('sequence');
+    await stopNeverReplies.promise;
+    await ctx.advance(2001);
+    await assert.rejects(noStopReply, /aborted/);
+    assert.equal(ctx.recipeTestRunning, false);
+    assert.equal(ctx.recipeTestSession, null, 'lost stop acknowledgements also release the local run lock');
+
+    console.log('PASS: sequence/random session ownership, renewal timeout cleanup, stale-token isolation, reservation STOP, ordering and collision regressions');
 })().catch(error => {console.error(error); process.exitCode = 1;});

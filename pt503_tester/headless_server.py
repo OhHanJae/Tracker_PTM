@@ -109,10 +109,19 @@ PELCO_MIN_COMMAND_GAP_S = 0.32
 PELCO_ABSOLUTE_AXIS_GAP_S = 0.05
 PELCO_POSITION_QUERY_GAP_S = 0.05
 MOTION_FEEDBACK_POLL_S = 0.2
+TEST_LEASE_MS = 5000
+TEST_READ_COMMANDS = {
+    "protocol.hello", "protocol.catalog", "system.ping", "system.heartbeat", "system.status",
+    "motor.status", "ptm.status", "system.commands", "serial.ports", "position.get", "laser.status",
+    "recipe.list", "recipe.get", "recipe.export", "recipe.pose_preview", "point.list",
+    "drawing.list", "drawing.get", "drawing.export", "drawing.estimate_recipe",
+    "drawing.estimate_xy", "drawing.estimate_pan_tilt", "raw.describe", "device.query",
+    "device.query_diagnostics", "magnification.query", "serial.scan_cancel",
+}
 
 PROTOCOL_NAME = 'PT503-Control'
 PROTOCOL_VERSION = '1.0'
-SUPPORTED_COMMANDS = supported_command_names()
+SUPPORTED_COMMANDS = (*supported_command_names(), "test.start", "test.renew", "test.stop")
 
 # Arduino UNO laser controller (Modbus RTU)
 LASER_DEFAULT_BAUD = 9600
@@ -252,6 +261,7 @@ class HeadlessController:
         self._completed_motion_id: str | None = None
         self._failed_motion_id: str | None = None
         self._last_motion_error: str = ""
+        self._test_session: dict[str, Any] | None = None
         self._selected_recipe_id: str | None = None
         self._selected_point_id: str | None = None
         self._home_valid = False
@@ -584,6 +594,8 @@ class HeadlessController:
     def _effective_laser_mode(self) -> int:
         if self._laser_plc_mode not in {1, 2, 3, 4, 5}:
             return 0
+        if self._test_session is not None:
+            return 1
         return 1 if self.laser_control_priority else self._laser_plc_mode
 
     def _apply_laser_state(self, state: str, *, manual: bool = False, profile: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -632,6 +644,7 @@ class HeadlessController:
                 continue
 
             with self._lock:
+                self._expire_test_session()
                 if not self.connected:
                     continue
                 try:
@@ -1025,6 +1038,9 @@ class HeadlessController:
     def close(self) -> None:
         """Close PT-503 serial only. Laser uses its own serial port."""
         with self._lock:
+            if self._test_session is not None:
+                with contextlib.suppress(HeadlessApiError, OSError):
+                    self._end_test_session("PT503 connection closed")
             self._power_on_home_sent = False
             self._jog_next_resend = 0.0
             self._active_jog = None
@@ -1059,6 +1075,7 @@ class HeadlessController:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
+            self._expire_test_session()
             selected_revision = None
             if self._selected_recipe_id and not self.recipe_store.storage_error:
                 try:
@@ -1068,6 +1085,7 @@ class HeadlessController:
             return {
                 "protocol": PROTOCOL_NAME,
                 "version": PROTOCOL_VERSION,
+                "operation": self._operation_status(),
                 "recipe_storage": {"ready": not bool(self.recipe_store.storage_error),
                                    "error": self.recipe_store.storage_error},
                 "selected_recipe_revision": selected_revision,
@@ -1497,7 +1515,140 @@ class HeadlessController:
         self.recipe_store.get_recipe(recipe_id)  # recipe_id 유효성 검증 유지
         return {"pan": point.pan, "tilt": point.tilt}, None
 
-    def command(
+    def _operation_status(self) -> dict[str, Any]:
+        session = self._test_session
+        manual = bool(not session and (self._active_jog is not None
+                      or self._pending_motion is not None and not self._pending_motion.get("automatic", False)
+                      or self._laser_manual_deadline))
+        return {"mode": "testing" if session else "manual" if manual else "idle",
+                "test_active": session is not None, "manual_active": manual,
+                "test_mode": session["mode"] if session else None,
+                "lease_remaining_ms": max(0, int((session["expires_at"] - time.monotonic()) * 1000)) if session else 0}
+
+    def _end_test_session(self, reason: str) -> dict[str, Any]:
+        session = self._test_session
+        self._test_session = None
+        self._tracker = None
+        self._axis_target = None
+        self._axis_target_motion_id = None
+        self._active_jog = None
+        self._jog_owner_client_id = None
+        self._jog_next_resend = self._jog_lease_deadline = 0.0
+        self.motion_state = "stopped"
+        self._finish_pending_motion(error=("MOTION_STOPPED", reason))
+        errors = []
+        if self.connected:
+            try:
+                self.send(stop(self._address), wait_ms=0)
+            except (HeadlessApiError, OSError) as exc:
+                errors.append(exc)
+        with self._laser_lock:
+            try:
+                self._laser_write_coil(False)
+                self._laser_deadline = 0.0
+            except (HeadlessApiError, OSError) as exc:
+                self._laser_deadline = time.monotonic() + 0.2
+                errors.append(exc)
+        if session and session.get("core_guard"):
+            with contextlib.suppress(HeadlessApiError):
+                self._core_request("operation.test.end", {"test_token": session["token"]}, timeout_s=0.3)
+        if errors:
+            raise HeadlessApiError("TEST_STOP_FAILED", str(errors[0]))
+        return {"accepted": True, "stopped": True, "laser_on": False}
+
+    def _expire_test_session(self) -> None:
+        if self._test_session and time.monotonic() >= self._test_session["expires_at"]:
+            try:
+                self._end_test_session("test control lease expired")
+            except (HeadlessApiError, OSError):
+                pass  # The laser service retains its OFF retry deadline.
+
+    def _notify_core_test(self, action: str, token: str, *, standalone: bool = False) -> bool:
+        try:
+            result = self._core_request(f"operation.test.{action}",
+                {"test_token": token, "lease_ms": TEST_LEASE_MS}, timeout_s=1.5,
+                error_code="CORE_TEST_GUARD_FAILED")
+        except HeadlessApiError as exc:
+            if standalone and isinstance(exc.__cause__, ConnectionRefusedError):
+                return False
+            raise
+        if result.get("accepted") is not True:
+            raise HeadlessApiError("BUSY", "Core is executing another operation")
+        return True
+
+    def _check_test_access(self, command: str, params: dict[str, Any]) -> None:
+        token = params.get("test_token")
+        session = self._test_session
+        if token is not None and (not session or token != session["token"]):
+            raise HeadlessApiError("TEST_SESSION_EXPIRED", "test session is no longer active")
+        if not session or command in TEST_READ_COMMANDS or command == "laser.power_save":
+            return
+        if command == "laser.off" and params.get("require_idle") is True:
+            raise HeadlessApiError("BUSY", "recipe test owns the device until completion or STOP")
+        if command in {"motion.stop", "motion.force_stop", "laser.off", "serial.disconnect"} and token is None:
+            self._end_test_session("test cancelled by operator or safety stop")
+            return
+        if token is None:
+            if command in {"motion.completion_config", "motion.tolerance"} and not params:
+                return
+            raise HeadlessApiError("BUSY", "recipe test owns the device until completion or STOP")
+        if command not in {"test.renew", "point.goto", "motion.goto", "motion.absolute", "laser.off", "laser.pulse", "recipe.pose_preview"}:
+            raise HeadlessApiError("BUSY", "command is not part of the active recipe test")
+        if command in {"point.goto", "motion.goto"} and str(params.get("recipe_id", "")) != session["recipe_id"]:
+            raise HeadlessApiError("STALE_TARGET", "test recipe selection changed")
+
+    def command(self, command: str, params: dict[str, Any], *,
+                client_id: str | None = None, request_id: Any = None) -> dict[str, Any]:
+        # Core callbacks and port discovery must not hold the device lock while waiting.
+        if command in {"power_save.settings", "power_save.wake", "serial.scan"}:
+            with self._lock:
+                self._expire_test_session()
+                self._check_test_access(command, params)
+            return self._command_dispatch(command, params, client_id=client_id, request_id=request_id)
+        with self._lock:
+            self._expire_test_session()
+            if (self._test_session and command in {"motion.stop", "laser.off"}
+                    and params.get("if_no_test_session") is True):
+                return {"accepted": False, "stopped": False, "reason": "another test session is active"}
+            if command == "test.start":
+                if self._shutdown.is_set():
+                    raise HeadlessApiError("SERVICE_STOPPING", "server is shutting down")
+                if self._test_session or self._pending_motion or self._active_jog or self.scanning or not self.connected:
+                    raise HeadlessApiError("BUSY", "connect the device and stop other operations before testing")
+                if self._effective_laser_mode() != 1 or not self._laser_manual_allowed or self.laser_bypass:
+                    raise HeadlessApiError("LASER_INTERLOCK", self._laser_manual_block_reason or "AUTO laser mode is required for testing")
+                mode = self._enum(params, "mode", {"sequence", "random"})
+                recipe = self.recipe_store.get_recipe(str(params.get("recipe_id", "")))
+                revision = self.recipe_store.recipe_revision(recipe.id)
+                token = uuid.uuid4().hex
+                guarded = self._notify_core_test("begin", token, standalone=True)
+                try:
+                    with self._laser_lock:
+                        self._laser_write_coil(False)
+                except (HeadlessApiError, OSError):
+                    if guarded:
+                        with contextlib.suppress(HeadlessApiError):
+                            self._core_request("operation.test.end", {"test_token": token}, timeout_s=0.3)
+                    raise
+                self._test_session = {"token": token, "mode": mode, "recipe_id": recipe.id, "core_guard": guarded,
+                                      "expires_at": time.monotonic() + TEST_LEASE_MS / 1000}
+                return {"test_token": self._test_session["token"], "lease_ms": TEST_LEASE_MS,
+                        "recipe_id": recipe.id, "recipe_revision": revision}
+            if command == "test.stop":
+                if not self._test_session or params.get("test_token") != self._test_session["token"]:
+                    return {"accepted": False, "stopped": False, "reason": "test session is no longer active"}
+                return self._end_test_session("recipe test stopped")
+            self._check_test_access(command, params)
+            if command == "test.renew":
+                if not self._test_session or params.get("test_token") != self._test_session["token"]:
+                    raise HeadlessApiError("TEST_SESSION_EXPIRED", "test session is no longer active")
+                if self._test_session.get("core_guard"):
+                    self._notify_core_test("renew", self._test_session["token"])
+                self._test_session["expires_at"] = time.monotonic() + TEST_LEASE_MS / 1000
+                return {"accepted": True, "lease_ms": TEST_LEASE_MS}
+            return self._command_dispatch(command, params, client_id=client_id, request_id=request_id)
+
+    def _command_dispatch(
         self,
         command: str,
         params: dict[str, Any],
@@ -1535,8 +1686,14 @@ class HeadlessController:
                 self._laser_core_policy = {**params, "plc_mode": plc_mode, "enabled": enabled,
                                            "automatic_off": automatic_off, "manual_allowed": allowed,
                                            "state_allowed": state_allowed}
-                mode = 1 if self.laser_control_priority and plc_mode in {1, 2, 3, 4, 5} else plc_mode
+                if self._test_session and (plc_mode not in {1, 2, 3, 4, 5} or not local_allowed):
+                    self._end_test_session("Core safety interlock changed")
+                mode = 1 if (self.laser_control_priority or self._test_session) and plc_mode in {1, 2, 3, 4, 5} else plc_mode
                 if self.laser_control_priority and mode == 1:
+                    enabled = False
+                    automatic_off = not local_allowed
+                    allowed = state_allowed = local_allowed
+                if self._test_session:
                     enabled = False
                     automatic_off = not local_allowed
                     allowed = state_allowed = local_allowed
@@ -1604,6 +1761,7 @@ class HeadlessController:
             return {"accepted": True}
         if command == "serial.scan":
             with self._lock:
+                self._check_test_access(command, params)
                 if self.scanning or self._auto_scan_active or self.connected:
                     raise HeadlessApiError("BUSY", "Disconnect before scanning")
                 self.scanning = True
@@ -1784,7 +1942,7 @@ class HeadlessController:
                 self._selected_point_id = point_id
                 result = self.command(
                     "motion.absolute",
-                    target,
+                    {**target, **({"test_token": params["test_token"]} if "test_token" in params else {})},
                     client_id=client_id,
                     request_id=request_id,
                 )
@@ -1812,7 +1970,7 @@ class HeadlessController:
                     request_id=request_id,
                 )
                 if self._pending_motion is not None:
-                    self._pending_motion.update(command=command, home=True)
+                    self._pending_motion.update(command=command, home=True, automatic=self._bool(params, "automatic", False))
                 return {**result, "homing": True}
             force_stop = command == "motion.force_stop"
             if force_stop:

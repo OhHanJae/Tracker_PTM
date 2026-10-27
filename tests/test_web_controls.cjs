@@ -17,6 +17,10 @@ const {chromium} = require('playwright');
         last_rx: [], auto_reconnect: {},
     };
     let failStatus = false;
+    let testToken = null;
+    let testMotion = 0;
+    let permitToken = 0;
+    let recipeList = [];
     let drawingList = [{id: 'first', name: 'First'}, {id: 'second', name: 'Second'}];
     const commandNames = ['system.ping', 'serial.scan', 'motion.absolute', 'point.goto', 'laser.on',
         'drawing.select_recipe', 'home.start', 'home.after', 'home.time', 'pelco.flip',
@@ -31,8 +35,34 @@ const {chromium} = require('playwright');
             const {command, params} = route.request().postDataJSON();
             if (command === 'system.commands') return json({commands: commandNames});
             if (command === 'serial.ports') return json({ports: []});
-            if (command === 'laser.off') return json({laser_on: false});
-            if (command === 'recipe.list') return json({recipes: []});
+            if (command === 'system.status') return json(state);
+            if (command === 'test.start') {
+                assert.equal(testToken, null);
+                testToken = 'browser-session';
+                state.operation = {mode: 'testing', test_active: true};
+                state.selected_recipe_revision = 'browser-revision';
+                return json({test_token: testToken, lease_ms: 5000, recipe_revision: 'browser-revision'});
+            }
+            if (command === 'test.renew') {
+                assert.equal(params.test_token, testToken);
+                return json({accepted: true, lease_ms: 5000});
+            }
+            if (command === 'test.stop') {
+                if (params.test_token !== testToken) return json({accepted: false, stopped: false});
+                testToken = null;
+                state.operation = {mode: 'idle', test_active: false};
+                state.motion = {state: 'stopped'};
+                state.laser.on = false;
+                return json({accepted: true, stopped: true, laser_on: false});
+            }
+            if (testToken && ['point.goto', 'laser.off', 'laser.pulse'].includes(command)) assert.equal(params.test_token, testToken);
+            if (command === 'laser.off') { state.laser.on = false; return json({laser_on: false, permit_token: ++permitToken}); }
+            if (command === 'point.goto' && params.test_token) {
+                state.motion = {state: 'completed', completed_id: 'test-motion-' + ++testMotion};
+                return json({motion_id: state.motion.completed_id, recipe_revision: 'browser-revision', laser_permit_token: permitToken});
+            }
+            if (command === 'laser.pulse' && params.test_token) { state.laser.on = true; return json({laser_on: true}); }
+            if (command === 'recipe.list') return json({recipes: recipeList});
             if (command === 'drawing.list') return json({drawings: drawingList});
             if (command === 'drawing.get') return json({drawing: {
                 ...drawingList.find(drawing => drawing.id === params.drawing_id),
@@ -220,12 +250,39 @@ const {chromium} = require('playwright');
         assert.equal((await sent('motion.stop')).length, 1);
         assert.equal((await sent('laser.off')).length, 1);
         await page.evaluate(() => { recipeTestRunning = false; recipeTestAbort = false; updateRecipeTestButtons(); });
+        state.operation = {mode: 'testing', test_active: true};
+        await page.evaluate(() => refreshOnce());
+        assert.equal(await page.locator('#runRecipeSequence').isDisabled(), true, 'observer pages reflect an active remote test');
+        assert.equal(await page.locator('#stopRecipeTest').isDisabled(), false, 'an operator can still explicitly stop the remote test');
+        assert.match(await page.evaluate(() => cmd('motion.jog', {}).catch(error => error.message)), /테스트를 먼저 정지/);
+        state.operation = {mode: 'idle', test_active: false};
+        await page.evaluate(() => refreshOnce());
+        recipeList = [{id: 'session-recipe', name: 'Session test', index: 1, points: [1, 2].map(order => ({
+            id: String(order), order, enabled: true, name: 'Point ' + order, pan: order, tilt: 0, dwell_ms: 0,
+        }))}];
+        await page.evaluate(async () => {
+            jog = null; padActive = false;
+            await loadRecipes('session-recipe');
+            $('recipeTestLaserMs').value = '600';
+        });
+        await clear();
+        await page.evaluate(() => runRecipePointTest('sequence'));
+        assert.equal((await sent('test.start')).length, 1);
+        assert.ok((await sent('test.renew')).length >= 1, 'real timers renew the session during illumination');
+        assert.equal((await sent('test.stop')).length, 1);
+        assert.deepEqual((await sent('point.goto')).map(request => request.params.point_id), ['1', '2']);
+        assert.ok((await sent('point.goto')).every(request => request.params.test_token === 'browser-session'));
+        assert.equal((await sent('motion.stop')).length, 0, 'normal point gaps never issue a global motor STOP');
+        assert.equal(await page.locator('#recipeTestStatus').innerText(), '순차 테스트 완료');
+        assert.equal(await page.evaluate(() => recipeTestSession), null);
+        assert.equal(await page.locator('#runRecipeSequence').isDisabled(), false, 'successful cleanup immediately releases the local controls');
+        assert.equal(testToken, null);
         drawingList = [];
         await page.reload();
         await page.waitForFunction(() => window.sent.some(item => item.command === 'drawing.list'));
         assert.equal((await sent('drawing.get')).length, 0, 'empty drawing list does not request a drawing');
         assert.deepEqual(errors, []);
-        console.log('PASS: protocol filtering, connection colors, initial/changed drawings, full mapping, persistence, standard/RAW inputs, STOP, focus, unplug/reconnect, mobile layout');
+        console.log('PASS: browser two-point test session/renewal/cleanup, remote ownership UI, protocol, drawings, gamepad STOP/focus/reconnect and mobile layout');
     } catch (error) {
         console.error({tabs: await page.locator('#tabs').innerText(), notice: await page.locator('#notice').innerText(), errors,
             pad: await page.evaluate(() => ({padConnected, padIndex, padMapping, padRequireCenter, jogStopBusy,

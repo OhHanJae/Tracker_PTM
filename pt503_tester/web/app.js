@@ -94,6 +94,8 @@ let recipeTestRunning = false;
 let recipeTestAbort = false;
 let recipeTestCommandPromise = null;
 let recipeTestStopPromise = null;
+let recipeTestSession = null;
+let localManualOutput = false;
 let recipeEstimates = new Map();
 let recipeEstimateKey = '';
 let recipeEstimateStatus = '활성 도면과 X/Y 캘리브레이션이 필요합니다.';
@@ -432,7 +434,7 @@ function renderLogs()
 // HTTP API
 // ============================================================================
 
-async function request(path, body)
+async function request(path, body, signal)
 {
     const response =
         await fetch(
@@ -447,9 +449,10 @@ async function request(path, body)
                     },
 
                     body:
-                        JSON.stringify(body)
+                        JSON.stringify(body),
+                    signal
                 }
-                : {}
+                : {signal}
         );
 
 
@@ -503,7 +506,7 @@ async function cmd(
     recipeTestOwned = false
 )
 {
-    if (recipeTestRunning && !recipeTestOwned)
+    if ((recipeTestRunning || status.operation?.test_active) && !recipeTestOwned)
     {
         const drawingMutation = command.startsWith('drawing.') && ![
             'drawing.list', 'drawing.get', 'drawing.export',
@@ -511,7 +514,7 @@ async function cmd(
         ].includes(command);
         if (['motion.stop', 'motion.force_stop', 'laser.off', 'serial.disconnect'].includes(command))
         {
-            const stopped = await stopRecipePointTest();
+            const stopped = await stopRecipePointTest({operator: true});
             if (command === 'motion.stop' || command === 'laser.off') return stopped;
         }
         else if ((drawingMutation || /^(motion\.|home\.|point\.(goto|upsert|delete|reorder|select)|recipe\.(create|update|upsert|delete|import|select)|laser\.(on|pulse|state|settings)|serial\.(connect|scan)|raw\.send)/.test(command))
@@ -519,6 +522,14 @@ async function cmd(
         {
             throw Error('포인트 테스트 중에는 수동 조작과 레시피 변경을 할 수 없습니다. 테스트를 먼저 정지하세요.');
         }
+    }
+    if (recipeTestOwned && recipeTestSession?.token && !command.startsWith('test.'))
+    {
+        params = {test_token: recipeTestSession.token, ...params};
+    }
+    if (!recipeTestOwned && /^(motion\.(absolute|relative|goto|jog)$|point\.goto$|home\.start$|cruise\.start$|scan\.start$|laser\.(on|pulse|state)$|raw\.send$)/.test(command))
+    {
+        localManualOutput = true;
     }
     if (['drawing.point_upsert', 'drawing.calibrate', 'drawing.reset_calibration',
          'drawing.estimate_pan_tilt', 'drawing.estimate_xy'].includes(command) &&
@@ -535,7 +546,9 @@ async function cmd(
                 {
                     command,
                     params
-                }
+                },
+                recipeTestOwned ? (command === 'test.stop'
+                    ? recipeTestSession?.stopController?.signal : recipeTestSession?.controller.signal) : undefined
             );
 
 
@@ -558,6 +571,7 @@ async function cmd(
     }
     catch (error)
     {
+        if (recipeTestOwned && recipeTestSession?.error) error = recipeTestSession.error;
         $('notice').dataset.kind = 'error';
         $('notice').textContent =
             error.message;
@@ -1222,7 +1236,7 @@ async function stopJog(preserveLaserManual = false)
     padRequireCenter =
         true;
 
-    if (recipeTestRunning) return stopRecipePointTest();
+    if (recipeTestRunning || status.operation?.test_active) return stopRecipePointTest({operator: true});
 
     // A JOG POST may already be in flight.  Let it finish first so an older
     // motion request cannot arrive at the server after STOP.
@@ -1296,7 +1310,7 @@ document
                     event.preventDefault();
 
                     if (
-                        !status.serial?.connected || recipeTestRunning
+                        !status.serial?.connected || recipeTestRunning || status.operation?.test_active
                     )
                     {
                         return;
@@ -1325,7 +1339,7 @@ document
         // arbitration even while the operator is still holding the control.
         element.addEventListener(
             'pointerup',
-            guarded(() => { if (!recipeTestRunning || jog) return stopJog(true); })
+            guarded(() => { if ((!recipeTestRunning && !status.operation?.test_active) || jog) return stopJog(true); })
         );
     });
 
@@ -1414,6 +1428,16 @@ window.addEventListener(
 
         recipeTestAbort = true;
 
+        if (recipeTestSession?.token)
+        {
+            navigator.sendBeacon('/api/command', new Blob(
+                [JSON.stringify({command: 'test.stop', params: {test_token: recipeTestSession.token}})],
+                {type: 'application/json'}
+            ));
+            return;
+        }
+        if (status.operation?.test_active || !localManualOutput) return;
+
         navigator.sendBeacon(
 
             '/api/command',
@@ -1425,7 +1449,7 @@ window.addEventListener(
                         command:
                             'motion.stop',
 
-                        params: {}
+                        params: {if_no_test_session: true}
                     })
                 ],
 
@@ -1436,7 +1460,7 @@ window.addEventListener(
             )
         );
         navigator.sendBeacon('/api/command', new Blob(
-            [JSON.stringify({command: 'laser.off', params: {}})],
+            [JSON.stringify({command: 'laser.off', params: {if_no_test_session: true}})],
             {type: 'application/json'}
         ));
     }
@@ -1471,6 +1495,7 @@ async function refreshOnce()
                     await request(
                         '/api/status'
                     );
+                updateRecipeTestButtons();
 
                 $('connection').classList.toggle('connected', Boolean(status.serial?.connected) &&
                     !['communication_error', 'communication_timeout'].includes(status.motion?.state));
@@ -1611,6 +1636,7 @@ async function refreshOnce()
 
                 status =
                     {};
+                updateRecipeTestButtons();
 
 
                 jog =
@@ -1881,6 +1907,7 @@ function setRecipeTestStatus(text)
 
 function updateRecipeTestButtons()
 {
+    const busy = recipeTestRunning || status.operation?.test_active === true;
     for (
         const id
         of [
@@ -1894,7 +1921,7 @@ function updateRecipeTestButtons()
         if ($(id))
         {
             $(id).disabled =
-                recipeTestRunning;
+                busy;
         }
     }
 
@@ -1902,7 +1929,7 @@ function updateRecipeTestButtons()
     if ($('stopRecipeTest'))
     {
         $('stopRecipeTest').disabled =
-            !recipeTestRunning;
+            !busy;
     }
 }
 
@@ -1978,11 +2005,61 @@ async function waitForRecipeMotion(motionId)
 }
 
 
+function clearRecipeTestTimers(session)
+{
+    clearTimeout(session.renewTimer);
+    clearTimeout(session.expiryTimer);
+}
+
+
+function failRecipeTestSession(session, error)
+{
+    if (recipeTestSession !== session || session.stopped || session.error) return;
+    session.error = error;
+    recipeTestAbort = true;
+    clearRecipeTestTimers(session);
+    session.controller.abort();
+}
+
+
+function keepRecipeTestSession(session, leaseMs)
+{
+    clearRecipeTestTimers(session);
+    session.expiryTimer = setTimeout(() => failRecipeTestSession(session,
+        Error('테스트 연결 유지 시간이 초과되었습니다. 장비가 자동 정지합니다.')), leaseMs);
+    session.renewTimer = setTimeout(async () => {
+        if (recipeTestSession !== session || session.closing) return;
+        try
+        {
+            const renewed = await cmd('test.renew', {test_token: session.token}, true, true);
+            if (recipeTestSession !== session || session.closing) return;
+            if (renewed.accepted === false) throw Error('테스트 세션이 종료되었습니다.');
+            keepRecipeTestSession(session, Number(renewed.lease_ms) || leaseMs);
+        }
+        catch (error)
+        {
+            if (!session.closing) failRecipeTestSession(session,
+                Error('테스트 연결 유지 실패: ' + error.message));
+        }
+    }, Math.min(1000, Math.max(100, Math.floor(leaseMs / 3))));
+}
+
+
 async function recipeTestCommand(command, params = {}, quiet = false)
 {
+    const session = recipeTestSession;
+    if (session?.token && !command.startsWith('test.')) params = {test_token: session.token, ...params};
     const pending = cmd(command, params, quiet, true);
     recipeTestCommandPromise = pending;
-    try { return await pending; }
+    try
+    {
+        const result = await pending;
+        if (command === 'test.start' && session === recipeTestSession && result.test_token)
+        {
+            session.token = result.test_token;
+        }
+        return result;
+    }
     finally
     {
         if (recipeTestCommandPromise === pending) recipeTestCommandPromise = null;
@@ -2100,6 +2177,7 @@ async function runRecipePointTest(mode)
     {
         throw Error('수동 운전을 정지한 후 테스트를 시작하세요.');
     }
+    if (status.operation?.test_active) throw Error('다른 포인트 테스트가 진행 중입니다.');
 
 
     const recipe =
@@ -2132,19 +2210,28 @@ async function runRecipePointTest(mode)
     recipeTestAbort =
         false;
 
+    const session = {token: null, controller: new AbortController(), closing: false, stopped: false};
+    recipeTestSession = session;
+    session.expiryTimer = setTimeout(() => failRecipeTestSession(session,
+        Error('테스트 시작 응답 시간이 초과되었습니다.')), 5000);
+
     updateRecipeTestButtons();
 
     let finalStatus =
         mode === 'sequence'
             ? '순차 테스트 완료'
             : '랜덤 반복 정지';
-    let testStarted = false;
     let testFailed = false;
     let testRecipeRevision;
 
 
     try
     {
+        const started = await recipeTestCommand('test.start', {mode, recipe_id: recipe.id}, true);
+        if (!session.token) throw Error('테스트 세션을 받지 못했습니다.');
+        if (recipeTestAbort) return;
+        keepRecipeTestSession(session, Number(started.lease_ms) || 5000);
+        testRecipeRevision = started.recipe_revision;
         if (recipe.product_rotation_deg || recipe.product_tilt_deg)
         {
             await recipeTestCommand('recipe.pose_preview', {recipe_id: recipe.id}, true);
@@ -2162,7 +2249,6 @@ async function runRecipePointTest(mode)
             throw Error('레이저 사용 차단: ' + (testStatus.laser.manual_block_reason
                 || 'Core의 현재 알람, 강제정지, 체결 후 재점등 제한을 확인하세요.'));
         }
-        testStarted = true;
         if (
             mode === 'sequence'
         )
@@ -2228,20 +2314,21 @@ async function runRecipePointTest(mode)
 
     catch (error)
     {
-        testFailed = true;
+        testFailed = !recipeTestAbort || Boolean(session.error);
         finalStatus =
-            '테스트 오류: '
-            + error.message;
+            testFailed ? '테스트 오류: ' + error.message : '테스트 정지';
 
-        throw error;
+        if (testFailed) throw error;
     }
 
     finally
     {
+        const interrupted = recipeTestAbort;
         try
         {
-            if (testStarted && (recipeTestAbort || testFailed)) await stopRecipePointTest();
+            if (session.token && !session.stopped) await stopRecipePointTest();
             else if (recipeTestStopPromise) await recipeTestStopPromise;
+            if (session.error) throw session.error;
         }
         catch (error)
         {
@@ -2250,12 +2337,15 @@ async function runRecipePointTest(mode)
         }
         finally
         {
-            if (recipeTestAbort && !testFailed && !finalStatus.startsWith('테스트 정지 오류:'))
+            if (interrupted && !testFailed && !finalStatus.startsWith('테스트 정지 오류:'))
             {
                 finalStatus = '테스트 정지';
             }
             recipeTestRunning = false;
             recipeTestAbort = false;
+            clearRecipeTestTimers(session);
+            session.controller.abort();
+            if (recipeTestSession === session) recipeTestSession = null;
             updateRecipeTestButtons();
             setRecipeTestStatus(finalStatus);
         }
@@ -2263,7 +2353,27 @@ async function runRecipePointTest(mode)
 }
 
 
-async function stopRecipePointTest()
+async function stopOperatorOutputs()
+{
+    const send = async command =>
+    {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 2000);
+        try { return await request('/api/command', {command, params: {}}, controller.signal); }
+        finally { clearTimeout(timeout); }
+    };
+    let stopped = {};
+    let stopError = null;
+    try { stopped = await send('motion.stop'); }
+    catch (error) { stopError = error; }
+    const off = await send('laser.off');
+    if (off.laser_on !== false) throw Error('레이저 OFF를 확인하지 못했습니다.');
+    if (stopError) throw stopError;
+    return {...stopped, laser_on: false};
+}
+
+
+async function stopRecipePointTest({operator = false} = {})
 {
     recipeTestAbort =
         true;
@@ -2277,9 +2387,42 @@ async function stopRecipePointTest()
     }
 
 
-    if (recipeTestStopPromise) return recipeTestStopPromise;
     const pending = recipeTestCommandPromise;
-    recipeTestStopPromise = (async () => {
+    if (!recipeTestStopPromise) recipeTestStopPromise = (async () => {
+        const session = recipeTestSession;
+        if (session)
+        {
+            session.closing = true;
+            try
+            {
+                // A start response may still be carrying the token needed to cancel.
+                if (!session.token && pending) await pending.catch(() => {});
+                if (!session.token) throw session.error || Error('테스트 시작을 확인하지 못했습니다. 장비는 연결 유지 만료 후 정지합니다.');
+                clearRecipeTestTimers(session);
+                session.stopController = new AbortController();
+                const timeout = setTimeout(() => session.stopController.abort(), 2000);
+                try
+                {
+                    const stopped = await cmd('test.stop', {test_token: session.token}, true, true);
+                    if (stopped.accepted !== false && stopped.laser_on !== false)
+                    {
+                        throw Error('레이저 OFF를 확인하지 못했습니다.');
+                    }
+                    session.stopped = true;
+                    if (stopped.accepted !== false && status.operation)
+                    {
+                        status.operation = {...status.operation, mode: 'idle', test_active: false, manual_active: false};
+                    }
+                    return stopped;
+                }
+                finally { clearTimeout(timeout); }
+            }
+            finally
+            {
+                clearRecipeTestTimers(session);
+                session.controller.abort();
+            }
+        }
         // Stop immediately, then repeat after an already submitted move/pulse.
         // A late HTTP response must not leave motion or illumination restarted.
         let stopped = {};
@@ -2301,8 +2444,13 @@ async function stopRecipePointTest()
         if (stopError) throw stopError;
         return {...stopped, laser_on: false};
     })();
-    try { return await recipeTestStopPromise; }
-    finally { recipeTestStopPromise = null; }
+    const stopping = recipeTestStopPromise;
+    try
+    {
+        const stopped = await stopping;
+        return operator && stopped.accepted === false ? await stopOperatorOutputs() : stopped;
+    }
+    finally { if (recipeTestStopPromise === stopping) recipeTestStopPromise = null; }
 }
 
 
@@ -2880,7 +3028,7 @@ $('runRecipeRandom').onclick =
 
 $('stopRecipeTest').onclick =
     guarded(
-        stopRecipePointTest
+        () => stopRecipePointTest({operator: true})
     );
 
 
@@ -7700,7 +7848,7 @@ function pollGamepad()
         padRequireCenter = true;
         return;
     }
-    if (recipeTestRunning)
+    if (recipeTestRunning || status.operation?.test_active)
     {
         padRequireCenter = true;
         return;

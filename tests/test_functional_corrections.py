@@ -1,4 +1,5 @@
 import json
+import time
 from unittest.mock import Mock, patch
 
 import pytest
@@ -267,3 +268,165 @@ def test_stale_test_pulse_cannot_relight_after_external_change(controller, chang
         controller.command('laser.pulse', params)
     assert exc.value.code in {'STALE_TARGET', 'CONFIG_OR_CAL_ERROR', 'LASER_INTERLOCK'}
     assert controller.laser_on is False
+
+
+def _start_recipe_test(controller):
+    controller._serial = Mock(is_open=True, in_waiting=0)
+    unavailable = HeadlessApiError('CORE_TEST_GUARD_FAILED', 'standalone test fixture')
+    unavailable.__cause__ = ConnectionRefusedError()
+    controller._core_request = Mock(side_effect=unavailable)
+    recipe = controller.recipe_store.get_recipe()
+    points = [controller.recipe_store.upsert_point(recipe.id, name=f'P{i}', pan=10*i, tilt=5*i)
+              for i in (1, 2)]
+    session = controller.command('test.start', {'mode': 'sequence', 'recipe_id': recipe.id})
+    return recipe, points, session['test_token']
+
+
+@pytest.mark.parametrize('command,params', [
+    ('motion.jog', {'pan': 'right'}), ('home.start', {}), ('motion.absolute', {'pan': 10}),
+    ('point.goto', {'recipe_id': 1, 'point_id': 1, 'require_homed': True}),
+    ('laser.on', {}), ('laser.pulse', {'duration_ms': 1000}),
+    ('laser.off', {'require_idle': True}), ('recipe.upsert', {'name': 'other'}),
+    ('raw.send', {'hex': 'FF 01 00 00 00 00 01'}),
+])
+def test_full_test_session_blocks_plc_and_manual_during_point_gaps(controller, command, params):
+    recipe, points, token = _start_recipe_test(controller)
+    assert controller.status()['operation']['mode'] == 'testing'
+    before = controller._laser_generation
+    with pytest.raises(HeadlessApiError) as exc:
+        controller.command(command, params)
+    assert exc.value.code == 'BUSY'
+    assert controller._laser_generation == before
+    assert controller.status()['operation']['test_active']
+    controller.command('test.renew', {'test_token': token})
+    for point in points:
+        off = controller.command('laser.off', {'test_token': token})
+        move = controller.command('point.goto', {'test_token': token, 'recipe_id': recipe.id,
+            'point_id': point.id, 'laser_after_move': False, 'exclusive': True,
+            'laser_permit_token': off['permit_token']})
+        controller.motion_state = 'completed'
+        controller._finish_pending_motion()
+        pulse = controller.command('laser.pulse', {'test_token': token, 'duration_ms': 1000,
+            'recipe_id': recipe.id, 'point_id': point.id, 'expected_motion_id': move['motion_id'],
+            'expected_recipe_revision': move['recipe_revision'], 'laser_permit_token': move['laser_permit_token']})
+        assert pulse['laser_on']
+        with pytest.raises(HeadlessApiError) as exc:
+            controller.command('motion.jog', {'pan': 'right'})
+        assert exc.value.code == 'BUSY' and controller.laser_on
+        controller.command('laser.off', {'test_token': token})
+        assert controller.status()['operation']['test_active']
+    assert controller.command('test.stop', {'test_token': token}) == {
+        'accepted': True, 'stopped': True, 'laser_on': False}
+    assert controller.status()['operation']['mode'] == 'idle'
+
+
+@pytest.mark.parametrize('command', ['motion.stop', 'motion.force_stop', 'laser.off', 'serial.disconnect'])
+def test_global_stop_and_disconnect_cancel_test(controller, command):
+    _, _, token = _start_recipe_test(controller)
+    controller.command(command, {})
+    assert not controller.status()['operation']['test_active']
+    assert not controller.laser_on
+    with pytest.raises(HeadlessApiError) as exc:
+        controller.command('point.goto', {'test_token': token})
+    assert exc.value.code == 'TEST_SESSION_EXPIRED'
+
+
+def test_test_lease_expiry_stops_motion_and_stale_cleanup_cannot_stop_new_test(controller):
+    recipe, points, token = _start_recipe_test(controller)
+    moved = controller.command('point.goto', {'test_token': token, 'recipe_id': recipe.id,
+        'point_id': points[0].id, 'laser_after_move': False})
+    controller._test_session['expires_at'] = time.monotonic() - 1
+    status = controller.status()
+    assert not status['operation']['test_active']
+    assert status['motion']['failed_id'] == moved['motion_id']
+    assert status['motion']['state'] == 'stopped' and not controller.laser_on
+    new = controller.command('test.start', {'mode': 'random', 'recipe_id': recipe.id})
+    assert new['test_token'] != token
+    assert controller.command('test.stop', {'test_token': token})['accepted'] is False
+    with pytest.raises(HeadlessApiError) as exc:
+        controller.command('test.renew', {'test_token': token})
+    assert exc.value.code == 'TEST_SESSION_EXPIRED'
+    assert controller.status()['operation']['test_active']
+
+
+@pytest.mark.parametrize('mode', [2, 3, 4, 5])
+def test_plc_operating_laser_modes_cannot_take_over_test(controller, mode):
+    _, _, token = _start_recipe_test(controller)
+    controller.command('laser.pulse', {'test_token': token, 'duration_ms': 1000})
+    controller.command('laser.power_save', {'plc_mode': mode, 'enabled': True, 'automatic_off': True,
+        'manual_allowed': False, 'state_allowed': False, 'local_allowed': True})
+    assert controller._effective_laser_mode() == 1
+    assert controller.laser_on and controller.status()['operation']['test_active']
+
+
+@pytest.mark.parametrize('mode,allowed', [(0, True), (6, True), (1, False)])
+def test_plc_off_and_real_interlock_cancel_test(controller, mode, allowed):
+    _, _, token = _start_recipe_test(controller)
+    controller.command('laser.pulse', {'test_token': token, 'duration_ms': 1000})
+    controller.command('laser.power_save', {'plc_mode': mode, 'enabled': False, 'automatic_off': True,
+        'manual_allowed': False, 'state_allowed': False, 'local_allowed': allowed})
+    assert not controller.laser_on
+    assert not controller.status()['operation']['test_active']
+
+
+@pytest.mark.parametrize('command,params', [
+    ('motion.jog', {'pan': 'right'}), ('motion.absolute', {'pan': 10}),
+    ('home.start', {}), ('laser.on', {}),
+])
+def test_server_reports_manual_operation_until_stop(controller, command, params):
+    assert controller.status()['operation']['mode'] == 'idle'
+    controller.command(command, params)
+    assert controller.status()['operation']['mode'] == 'manual'
+    controller.command('motion.force_stop', {})
+    assert controller.status()['operation']['mode'] == 'idle'
+
+
+def test_automatic_home_is_not_reported_as_manual(controller):
+    controller.command('home.start', {'automatic': True})
+    assert controller.status()['operation']['manual_active'] is False
+
+
+def test_pagehide_from_previous_manual_page_does_not_cancel_active_test(controller):
+    _, _, token = _start_recipe_test(controller)
+    for command in ('motion.stop', 'laser.off'):
+        result = controller.command(command, {'if_no_test_session': True})
+        assert result['accepted'] is False
+        assert controller._test_session['token'] == token
+    controller.command('motion.stop', {})
+    assert not controller.status()['operation']['test_active']
+
+
+def test_core_reservation_prevents_start_and_releases_after_test_stop(controller):
+    recipe, _, token = _start_recipe_test(controller)
+    controller.command('test.stop', {'test_token': token})
+    controller._core_request = Mock(return_value={'accepted': False})
+    with pytest.raises(HeadlessApiError) as exc:
+        controller.command('test.start', {'mode': 'sequence', 'recipe_id': recipe.id})
+    assert exc.value.code == 'BUSY' and controller._test_session is None
+    controller._core_request = Mock(return_value={'accepted': True})
+    started = controller.command('test.start', {'mode': 'sequence', 'recipe_id': recipe.id})
+    assert controller._test_session['core_guard'] is True
+    controller.command('test.renew', {'test_token': started['test_token']})
+    controller.command('test.stop', {'test_token': started['test_token']})
+    assert [call.args[0] for call in controller._core_request.call_args_list] == [
+        'operation.test.begin', 'operation.test.renew', 'operation.test.end']
+
+
+def test_managed_test_does_not_extend_lease_when_core_renewal_fails(controller):
+    recipe, _, token = _start_recipe_test(controller)
+    controller.command('test.stop', {'test_token': token})
+    controller._core_request = Mock(return_value={'accepted': True})
+    started = controller.command('test.start', {'mode': 'sequence', 'recipe_id': recipe.id})
+    before = controller._test_session['expires_at']
+    controller._core_request.side_effect = HeadlessApiError('CORE_TEST_GUARD_FAILED', 'connection lost')
+    with pytest.raises(HeadlessApiError):
+        controller.command('test.renew', {'test_token': started['test_token']})
+    assert controller._test_session['expires_at'] == before
+
+
+def test_session_api_is_advertised_only_by_the_headless_runtime(controller):
+    from pt503_tester.api_metadata import supported_command_names
+    commands = controller.command('system.commands', {})['commands']
+    for command in ('test.start', 'test.renew', 'test.stop'):
+        assert command in commands
+        assert command not in supported_command_names()
