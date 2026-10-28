@@ -138,7 +138,7 @@ LASER_API_COMMANDS = {
     'laser.serial_disconnect',
     'laser.status',
 }
-PTM_SETTINGS_COMMANDS = {'ptm.settings'}
+PTM_SETTINGS_COMMANDS = {'ptm.settings', 'ptm.communication_settings'}
 DRAWING_API_COMMANDS = {
     'drawing.list',
     'drawing.get',
@@ -1600,7 +1600,7 @@ class HeadlessController:
     def command(self, command: str, params: dict[str, Any], *,
                 client_id: str | None = None, request_id: Any = None) -> dict[str, Any]:
         # Core callbacks and port discovery must not hold the device lock while waiting.
-        if command in {"power_save.settings", "power_save.wake", "serial.scan"}:
+        if command in {"power_save.settings", "power_save.wake", "ptm.communication_settings", "serial.scan"}:
             with self._lock:
                 self._expire_test_session()
                 self._check_test_access(command, params)
@@ -1732,6 +1732,27 @@ class HeadlessController:
                     })
                 return {"sleeping": enabled, "laser_on": self.laser_on, "plc_mode": plc_mode,
                         "manual_override": preserve_manual, "manual_allowed": allowed}
+        if command == "ptm.communication_settings":
+            if "timeout_s" in params or "status_retries" in params:
+                timeout = self._float(params, "timeout_s", minimum=0.1, maximum=60)
+                retries = self._int(params, "status_retries", minimum=0, maximum=10)
+                expected_timeout = self._float(params, "expected_timeout_s", minimum=0.1, maximum=60)
+                expected_retries = self._int(params, "expected_status_retries", minimum=0, maximum=10)
+                config = self._core_request("monitor.config.apply", {
+                    "patch": {"motor": {"timeout_s": timeout, "status_retries": retries}},
+                    "expected": {"motor.timeout_s": expected_timeout, "motor.status_retries": expected_retries},
+                }, timeout_s=10.0)
+            else:
+                config = self._core_request("get_config", {})
+            motor = config.get("motor")
+            if not isinstance(motor, dict):
+                raise HeadlessApiError("CORE_SETTINGS_FAILED", "Core PTM communication settings are unavailable")
+            try:
+                timeout = self._float(motor, "timeout_s", minimum=0.1, maximum=60)
+                retries = self._int(motor, "status_retries", minimum=0, maximum=10)
+            except HeadlessApiError as exc:
+                raise HeadlessApiError("CORE_SETTINGS_FAILED", "Core PTM communication settings are unavailable") from exc
+            return {"timeout_s": timeout, "status_retries": retries, "managed_by": "Core"}
         if command == "power_save.settings":
             # Core may reconnect PTM while applying configuration. Do not hold _lock here.
             if "timeout_minutes" in params:

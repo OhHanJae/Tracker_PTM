@@ -20,6 +20,8 @@ const {chromium} = require('playwright');
     let testToken = null;
     let testMotion = 0;
     let permitToken = 0;
+    let communicationSettings = {timeout_s: 3, status_retries: 2, managed_by: 'Core'};
+    let failCommunicationSave = false;
     let recipeList = [];
     let drawingList = [{id: 'first', name: 'First'}, {id: 'second', name: 'Second'}];
     const commandNames = ['system.ping', 'serial.scan', 'motion.absolute', 'point.goto', 'laser.on',
@@ -36,6 +38,17 @@ const {chromium} = require('playwright');
             if (command === 'system.commands') return json({commands: commandNames});
             if (command === 'serial.ports') return json({ports: []});
             if (command === 'system.status') return json(state);
+            if (command === 'ptm.communication_settings') {
+                if ('timeout_s' in params) {
+                    if (failCommunicationSave) return route.fulfill({json: {
+                        ok: false, error: {message: 'Stop PLC operation and motion before applying configuration'},
+                    }});
+                    assert.equal(params.expected_timeout_s, communicationSettings.timeout_s);
+                    assert.equal(params.expected_status_retries, communicationSettings.status_retries);
+                    communicationSettings = {...communicationSettings, timeout_s: params.timeout_s, status_retries: params.status_retries};
+                }
+                return json(communicationSettings);
+            }
             if (command === 'test.start') {
                 assert.equal(testToken, null);
                 testToken = 'browser-session';
@@ -106,6 +119,26 @@ const {chromium} = require('playwright');
         assert.equal(await page.locator('#drawingSelect').inputValue(), 'first', 'first drawing loads without a click');
         await page.waitForFunction(() => document.querySelector('#connection').classList.contains('connected'));
         assert.equal(await page.locator('#connection').evaluate(element => getComputedStyle(element, '::before').backgroundColor), 'rgb(20, 164, 111)');
+        await page.locator('#tabs button').filter({hasText: /^설정$/}).click();
+        await page.waitForFunction(() => !document.querySelector('#ptmStatusTimeout').disabled);
+        assert.equal(await page.locator('#ptmStatusTimeout').inputValue(), '3');
+        assert.equal(await page.locator('#ptmStatusRetries').inputValue(), '2');
+        await page.locator('#ptmStatusTimeout').fill('1.5');
+        await page.locator('#ptmStatusRetries').fill('4');
+        await page.locator('#ptmCommunicationSettings button').click();
+        await page.waitForFunction(() => !document.querySelector('#ptmStatusTimeout').disabled);
+        assert.equal(communicationSettings.timeout_s, 1.5);
+        assert.equal(communicationSettings.status_retries, 4);
+        assert.equal(await page.locator('#ptmCommunicationState').innerText(), 'Core에 저장됨');
+        failCommunicationSave = true;
+        await page.locator('#ptmStatusRetries').fill('0');
+        await page.locator('#ptmCommunicationSettings button').click();
+        await page.waitForFunction(() => document.querySelector('#ptmCommunicationState').textContent.startsWith('저장 실패:'));
+        assert.equal(communicationSettings.status_retries, 4, 'failed save preserves the Core value');
+        failCommunicationSave = false;
+        await page.locator('#refreshPtmCommunication').click();
+        await page.waitForFunction(() => !document.querySelector('#ptmStatusRetries').disabled);
+        assert.equal(await page.locator('#ptmStatusRetries').inputValue(), '4');
         await page.locator('#tabs button').filter({hasText: '프로토콜·고급 설정'}).click();
         const groups = await page.locator('#commandGroups strong').allTextContents();
         for (const group of ['camera', 'cruise', 'focus', 'lens', 'pattern', 'preset', 'scan', 'zoom', 'magnification', 'screen', 'zone', 'aux'])

@@ -733,6 +733,7 @@ for (
                 }
 
 
+                if (id === 'settings') guarded(loadPtmCommunicationSettings)();
                 if (id === 'drawings')
                 {
                     window.dispatchEvent(
@@ -1134,6 +1135,67 @@ $('ptmSettings').onsubmit = guarded(async event => {
     ptmSettingsDirty = false;
     status.settings = saved;
     renderPtmSettings(saved);
+});
+
+let ptmCommunicationSettings = null;
+let ptmCommunicationBusy = false;
+
+function renderPtmCommunicationSettings(settings)
+{
+    ptmCommunicationSettings = settings;
+    $('ptmStatusTimeout').value = settings.timeout_s;
+    $('ptmStatusRetries').value = settings.status_retries;
+    $('ptmCommunicationState').textContent = 'Core에 저장됨';
+}
+
+function setPtmCommunicationBusy(busy)
+{
+    ptmCommunicationBusy = busy;
+    $('refreshPtmCommunication').disabled = busy;
+    for (const input of $('ptmCommunicationSettings').querySelectorAll('input, button'))
+        input.disabled = busy || !ptmCommunicationSettings;
+}
+
+async function loadPtmCommunicationSettings()
+{
+    if (ptmCommunicationBusy) return;
+    setPtmCommunicationBusy(true);
+    $('ptmCommunicationState').textContent = 'Core 설정 조회 중…';
+    try
+    {
+        renderPtmCommunicationSettings(await cmd('ptm.communication_settings', {}, true));
+    }
+    catch (error)
+    {
+        ptmCommunicationSettings = null;
+        $('ptmCommunicationState').textContent = '조회 실패: ' + error.message;
+        throw error;
+    }
+    finally { setPtmCommunicationBusy(false); }
+}
+
+$('refreshPtmCommunication').onclick = guarded(loadPtmCommunicationSettings);
+$('ptmCommunicationSettings').onsubmit = guarded(async event => {
+    event.preventDefault();
+    if (ptmCommunicationBusy || !ptmCommunicationSettings) return;
+    const params = {
+        timeout_s: Number($('ptmStatusTimeout').value),
+        status_retries: Number($('ptmStatusRetries').value),
+        expected_timeout_s: ptmCommunicationSettings.timeout_s,
+        expected_status_retries: ptmCommunicationSettings.status_retries
+    };
+    setPtmCommunicationBusy(true);
+    $('ptmCommunicationState').textContent = 'Core에 저장 중…';
+    try
+    {
+        renderPtmCommunicationSettings(await cmd('ptm.communication_settings', params));
+    }
+    catch (error)
+    {
+        $('ptmCommunicationState').textContent = '저장 실패: ' + error.message;
+        throw error;
+    }
+    finally { setPtmCommunicationBusy(false); }
 });
 
 

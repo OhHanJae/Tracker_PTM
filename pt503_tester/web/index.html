@@ -46,6 +46,19 @@
                     <p>방향 반전은 수동 버튼과 게임패드 JOG에 공통 적용되며 절대좌표와 레시피 좌표는 유지됩니다.</p>
                     <p>전원 ON 호밍은 지원 펌웨어의 전원 인가 Self-check 설정입니다. 연결 중에는 즉시 설정 명령을 전송하고, 연결 전 저장하면 다음 연결 시 전송합니다. 장치가 설정을 지원하는지는 실제 전원 재인가로 확인하세요.</p>
                 </section>
+                <section>
+                    <h3>Core ↔ PTM 통신 설정</h3>
+                    <form id="ptmCommunicationSettings">
+                        <div class="fields">
+                            <label>조회 타임아웃 (초)<input id="ptmStatusTimeout" type="number" min="0.1" max="60" step="0.1" required disabled></label>
+                            <label>타임아웃 시 재시도 횟수<input id="ptmStatusRetries" type="number" min="0" max="10" step="1" required disabled></label>
+                        </div>
+                        <button disabled>통신 설정 저장</button><output id="ptmCommunicationState">Core 설정 조회 대기</output>
+                    </form>
+                    <button id="refreshPtmCommunication" type="button">설정 새로고침</button>
+                    <p>최초 조회와 설정한 재시도가 모두 실패하면 통신 오류를 반영합니다. 조회가 성공하면 재시도 횟수는 초기화됩니다.</p>
+                    <p>Core가 실행 중이고 운전과 모터 동작이 정지된 상태에서 저장하세요. 설정은 Core에 저장됩니다.</p>
+                </section>
             </div>
         </section>
         <section id="manual" class="page">
