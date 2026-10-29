@@ -373,7 +373,7 @@ export async function createStandaloneViewer({
     draw();
 
     return {
-        setPose(frame, rotation = 0, tilt = 0)
+        setPose(frame, rotation = 0, tilt = 0, translation = [0, 0, 0])
         {
             poseMatrix.identity();
             if (frame)
@@ -385,6 +385,8 @@ export async function createStandaloneViewer({
                     .multiply(new THREE.Matrix4().makeRotationAxis(axis(frame.rotation_axis), THREE.MathUtils.degToRad(rotation)))
                     .multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
             }
+            const offset = new THREE.Vector3(...translation).multiplyScalar(MODEL_UNITS_PER_MM);
+            poseMatrix.premultiply(new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z));
             poseRoot.matrix.copy(poseMatrix);
             poseRoot.matrixWorldNeedsUpdate = true;
             render();

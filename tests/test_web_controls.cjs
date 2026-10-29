@@ -23,6 +23,8 @@ const {chromium} = require('playwright');
     let communicationSettings = {timeout_s: 3, status_retries: 2, managed_by: 'Core'};
     let failCommunicationSave = false;
     let recipeList = [];
+    let recipePoseBackup = null;
+    let failRecipePose = false;
     let drawingList = [{id: 'first', name: 'First'}, {id: 'second', name: 'Second'}];
     const commandNames = ['system.ping', 'serial.scan', 'motion.absolute', 'point.goto', 'laser.on',
         'drawing.select_recipe', 'home.start', 'home.after', 'home.time', 'pelco.flip',
@@ -76,6 +78,22 @@ const {chromium} = require('playwright');
             }
             if (command === 'laser.pulse' && params.test_token) { state.laser.on = true; return json({laser_on: true}); }
             if (command === 'recipe.list') return json({recipes: recipeList});
+            if (command === 'recipe.pose_apply') {
+                if (failRecipePose) return route.fulfill({json: {ok: false, error: {message: 'pose rejected'}}});
+                assert.deepEqual(params, {recipe_id: 'pose-recipe', product_rotation_deg: 15,
+                    product_tilt_deg: 3, product_translation_mm: [10, -20, 30]});
+                recipePoseBackup = structuredClone(recipeList[0]);
+                recipeList[0] = {...recipeList[0], product_rotation_deg: 15, product_tilt_deg: 3,
+                    drawing: {...recipeList[0].drawing, product_rotation_deg: 15, product_tilt_deg: 3,
+                        product_translation_mm: [10, -20, 30], pose_undo: {previous: recipePoseBackup},
+                        points: recipeList[0].drawing.points.map(point => ({...point, posed_position: [100, 200, 300]}))},
+                    points: recipeList[0].points.map(point => ({...point, pan: 12, tilt: 3}))};
+                return json({recipe: recipeList[0]});
+            }
+            if (command === 'recipe.pose_undo') {
+                recipeList[0] = recipePoseBackup;
+                return json({recipe: recipeList[0]});
+            }
             if (command === 'drawing.list') return json({drawings: drawingList});
             if (command === 'drawing.get') return json({drawing: {
                 ...drawingList.find(drawing => drawing.id === params.drawing_id),
@@ -290,6 +308,36 @@ const {chromium} = require('playwright');
         assert.match(await page.evaluate(() => cmd('motion.jog', {}).catch(error => error.message)), /테스트를 먼저 정지/);
         state.operation = {mode: 'idle', test_active: false};
         await page.evaluate(() => refreshOnce());
+        recipeList = [{id: 'pose-recipe', name: 'Pose test', index: 7,
+            drawing: {product_rotation_deg: 0, product_tilt_deg: 0, product_translation_mm: [0, 0, 0],
+                calibration: {rotation_axis: 'X', tilt_axis: 'Y'},
+                points: [1, 2].map(id => ({id: 'source-' + id, x: id, y: 2, z: 3}))},
+            points: [1, 2].map(order => ({id: String(order), order, enabled: true, name: 'P' + order,
+                pan: order, tilt: 0, dwell_ms: 0, drawing_point_id: 'source-' + order}))}];
+        await page.evaluate(async () => {jog = null; padActive = false; await loadRecipes('pose-recipe');});
+        await page.locator('#tabs button').filter({hasText: /^레시피·포인트$/}).click();
+        for (const [id, value] of [['recipePoseTurn', '15'], ['recipePoseTilt', '3'],
+            ['recipePoseX', '10'], ['recipePoseY', '-20'], ['recipePoseZ', '30']]) await page.locator('#' + id).fill(value);
+        await page.evaluate(() => refreshOnce());
+        assert.equal(await page.locator('#recipePoseX').inputValue(), '10', 'polling preserves unsaved pose input');
+        await clear();
+        await page.locator('#applyRecipePose').click();
+        await page.waitForFunction(() => !document.querySelector('#undoRecipePose').disabled);
+        assert.equal((await sent('recipe.pose_apply')).length, 1);
+        assert.equal((await sent('point.goto')).length, 0, 'applying pose only changes saved targets');
+        assert.equal(await page.locator('#recipePoseTurn').inputValue(), '15');
+        for (const row of await page.locator('#points tr').allTextContents()) assert.match(row, /100\.000/);
+        await page.locator('#undoRecipePose').click();
+        await page.waitForFunction(() => !recipePoseBusy && document.querySelector('#undoRecipePose').disabled);
+        assert.equal(await page.locator('#recipePoseTurn').inputValue(), '0');
+        assert.equal(await page.locator('#recipePoseX').inputValue(), '0');
+        failRecipePose = true;
+        await page.locator('#recipePoseTurn').fill('15');
+        await page.locator('#applyRecipePose').click();
+        await page.waitForFunction(() => document.querySelector('#recipePoseStatus').textContent.includes('pose rejected'));
+        assert.equal(await page.locator('#recipePoseTurn').inputValue(), '15', 'failed apply preserves operator input');
+        assert.equal(recipeList[0].points[0].pan, 1, 'failed apply preserves saved targets');
+        failRecipePose = false;
         recipeList = [{id: 'session-recipe', name: 'Session test', index: 1, points: [1, 2].map(order => ({
             id: String(order), order, enabled: true, name: 'Point ' + order, pan: order, tilt: 0, dwell_ms: 0,
         }))}];

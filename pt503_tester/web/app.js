@@ -22,6 +22,9 @@ let status = {};
 let recipes = [];
 let editId = null;
 let logs = [];
+let recipePoseRecipeId = null;
+let recipePoseDirty = false;
+let recipePoseBusy = false;
 
 let lastTx = '';
 let lastRx = '';
@@ -1862,6 +1865,20 @@ function requestRecipeEstimates()
     const recipe = selected();
     const drawing = activeDrawing;
 
+    if (recipe?.drawing?.points?.length)
+    {
+        const points = new Map(recipe.drawing.points.map(point => [point.id, point]));
+        recipeEstimates = new Map(recipe.points.flatMap(point => {
+            const source = points.get(point.drawing_point_id);
+            if (!source) return [];
+            const position = source.posed_position || [source.x, source.y, source.z];
+            return [[point.id, {x: position[0], y: position[1], z: position[2]}]];
+        }));
+        recipeEstimateKey = `${recipe.id}:${recipe.updated}`;
+        recipeEstimateStatus = '레시피 도면 XYZ와 제품 자세 보정 기준입니다.';
+        return;
+    }
+
     if (!recipe || !drawing?.calibration)
     {
         recipeEstimates = new Map();
@@ -1993,7 +2010,89 @@ function updateRecipeTestButtons()
         $('stopRecipeTest').disabled =
             !busy;
     }
+    renderRecipePose();
 }
+
+function renderRecipePose()
+{
+    const recipe = selected();
+    const context = recipe?.drawing;
+    const ready = Boolean(context?.calibration && recipe.points.length);
+    const moving = Boolean(status.motion?.id || ['jog', 'tracking', 'homing'].includes(status.motion?.state));
+    const blocked = recipePoseBusy || recipeTestRunning || status.operation?.test_active === true || moving;
+    if (recipePoseRecipeId !== recipe?.id)
+    {
+        recipePoseRecipeId = recipe?.id || null;
+        recipePoseDirty = false;
+        $('recipePoseStatus').textContent = ready
+            ? `보정 기준축: 턴 ${context.calibration.rotation_axis || '—'} / 틸트 ${context.calibration.tilt_axis || '—'} · 도면 XYZ(mm)`
+            : '도면 좌표와 캘리브레이션을 연결하고 포인트를 레시피에 저장하세요.';
+    }
+    if (!recipePoseDirty && !recipePoseBusy)
+    {
+        const translation = context?.product_translation_mm || [0, 0, 0];
+        for (const [id, value] of [
+            ['recipePoseTurn', context?.product_rotation_deg || 0],
+            ['recipePoseTilt', context?.product_tilt_deg || 0],
+            ['recipePoseX', translation[0]], ['recipePoseY', translation[1]], ['recipePoseZ', translation[2]]
+        ]) $(id).value = value;
+    }
+    for (const input of $('recipePoseForm').querySelectorAll('input')) input.disabled = blocked || !ready;
+    $('applyRecipePose').disabled = blocked || !ready;
+    $('undoRecipePose').disabled = blocked || !context?.pose_undo;
+    if (recipePoseBusy) $('recipeSelect').disabled = true;
+}
+
+async function changeRecipePose(undo = false)
+{
+    const recipe = selected();
+    if (!recipe || recipePoseBusy) return;
+    const params = {recipe_id: recipe.id};
+    if (!undo)
+    {
+        params.product_rotation_deg = Number($('recipePoseTurn').value);
+        params.product_tilt_deg = Number($('recipePoseTilt').value);
+        params.product_translation_mm = ['recipePoseX', 'recipePoseY', 'recipePoseZ'].map(id => Number($(id).value));
+    }
+    recipePoseBusy = true;
+    renderRecipePose();
+    $('recipePoseStatus').textContent = undo ? '보정 되돌리는 중…' : '전체 포인트 보정 중…';
+    let feedback = '';
+    try
+    {
+        const result = await cmd(undo ? 'recipe.pose_undo' : 'recipe.pose_apply', params);
+        recipes = recipes.map(item => item.id === recipe.id ? result.recipe : item);
+        recipePoseDirty = false;
+        clearPoint();
+        renderPoints();
+        feedback = undo ? '마지막 보정 적용 직전 상태로 복원했습니다.' : '전체 포인트 보정을 저장했습니다. 다음 포인트 이동부터 적용됩니다.';
+        if (activeDrawing?.selected_recipe_id === recipe.id)
+        {
+            const result = await cmd('drawing.get', {drawing_id: activeDrawing.id}, true);
+            activeDrawing = result.drawing;
+            loadDrawingPoseInputs();
+            renderDrawingPanel();
+        }
+    }
+    catch (error)
+    {
+        feedback = '보정 처리 실패: ' + error.message;
+        throw error;
+    }
+    finally
+    {
+        recipePoseBusy = false;
+        updateRecipeTestButtons();
+        $('recipePoseStatus').textContent = feedback;
+    }
+}
+
+$('recipePoseForm').oninput = () => { recipePoseDirty = true; };
+$('recipePoseForm').onsubmit = guarded(async event => {
+    event.preventDefault();
+    await changeRecipePose();
+});
+$('undoRecipePose').onclick = guarded(() => changeRecipePose(true));
 
 
 function sleep(ms)

@@ -1510,8 +1510,7 @@ class HeadlessController:
     def _recipe_motion_target(
         self, recipe_id: str, point: RecipePoint
     ) -> tuple[dict[str, float], dict[str, Any] | None]:
-        # 제품 자세 보정은 도면 캘리브레이션 단계에서 Pan/Tilt에 이미 반영된다.
-        # 레시피의 product_rotation_deg / product_tilt_deg는 레거시 확인용 읽기전용이다.
+        # 도면 캘리브레이션/레시피 자세 보정에서 계산한 저장값을 그대로 이동한다.
         self.recipe_store.get_recipe(recipe_id)  # recipe_id 유효성 검증 유지
         return {"pan": point.pan, "tilt": point.tilt}, None
 
@@ -2649,6 +2648,23 @@ class HeadlessController:
 
         if command == "recipe.list":
             return {"recipes": self.recipe_store.list_recipes()}
+        if command in {"recipe.pose_apply", "recipe.pose_undo"}:
+            if self._pending_motion or self._active_jog is not None or self.scanning or self._auto_scan_active:
+                raise HeadlessApiError("BUSY", "제품 자세 보정 전에 이동/조그/스캔을 정지하세요.")
+            recipe_id = self.recipe_store.get_recipe(str(params["recipe_id"])).id
+            if command == "recipe.pose_undo":
+                return {"recipe": self.drawing_store.undo_recipe_pose(recipe_id)}
+            rotation = self._float(params, "product_rotation_deg", minimum=-360, maximum=360)
+            tilt = self._float(params, "product_tilt_deg", minimum=-360, maximum=360)
+            translation = params.get("product_translation_mm")
+            if (not isinstance(translation, list) or len(translation) != 3
+                    or any(type(value) not in (int, float) or not math.isfinite(value) or abs(value) > 1e6
+                           for value in translation)):
+                raise HeadlessApiError("INVALID_PARAMS", "product_translation_mm must contain finite X/Y/Z values in -1000000..1000000")
+            return {"recipe": self.drawing_store.apply_recipe_pose(
+                recipe_id, product_rotation_deg=rotation, product_tilt_deg=tilt,
+                product_translation_mm=translation,
+            )}
         if command == "recipe.pose_preview":
             recipe_id = self.recipe_store.get_recipe(str(params["recipe_id"])).id
             if params.get("point_id"):

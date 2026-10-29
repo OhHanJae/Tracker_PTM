@@ -105,6 +105,19 @@
                     id="runRecipeRandom" type="button">랜덤 반복 시작</button><button id="stopRecipeTest" type="button"
                     class="danger" disabled>테스트 정지</button><output id="recipeTestStatus">대기</output></div>
             </div>
+            <form id="recipePoseForm">
+                <div class="fields">
+                    <label>제품 턴 (°)<input id="recipePoseTurn" type="number" min="-360" max="360" step="0.1" value="0" required></label>
+                    <label>제품 틸트 (°)<input id="recipePoseTilt" type="number" min="-360" max="360" step="0.1" value="0" required></label>
+                    <label>X 이동 (mm)<input id="recipePoseX" type="number" min="-1000000" max="1000000" step="0.1" value="0" required></label>
+                    <label>Y 이동 (mm)<input id="recipePoseY" type="number" min="-1000000" max="1000000" step="0.1" value="0" required></label>
+                    <label>Z 이동 (mm)<input id="recipePoseZ" type="number" min="-1000000" max="1000000" step="0.1" value="0" required></label>
+                    <button id="applyRecipePose" type="submit">전체 포인트 보정 적용</button>
+                    <button id="undoRecipePose" type="button" disabled>보정 되돌리기</button>
+                </div>
+                <output id="recipePoseStatus" role="status" aria-live="polite">도면 좌표와 캘리브레이션이 있는 레시피를 선택하세요.</output>
+                <p class="recipe-move-help">기준 자세에서의 절대 보정값입니다. 제품 중심 기준 턴 → 틸트 → 도면 X/Y/Z 이동 순서로 적용하며, 되돌리기는 마지막 적용 직전 상태를 복원합니다. 저장한 보정값은 다음 포인트 이동부터 사용합니다.</p>
+            </form>
             <p id="recipeDescription"></p>
             <output id="selectedPointStatus">선택 포인트: -</output>
             <div class="table-scroll">
@@ -143,7 +156,7 @@
                     <label>레시피 목록<select id="recipeManagerSelect" size="8" aria-label="관리할 레시피"></select></label>
                     <form id="recipeManagerForm">
                         <div class="fields"><label>숫자 ID (INDEX)<input id="recipeManagerIndex" type="number" min="1" max="2147483647" step="1" required></label><label>이름<input id="recipeManagerName" required></label><label>설명<input id="recipeManagerDescription"></label><label>제품 회전각 ° (읽기전용)<input id="recipeProductRotation" type="number" min="-360" max="360" step="0.1" value="0" readonly></label><label>제품 틸팅각 ° (읽기전용)<input id="recipeProductTilt" type="number" min="-360" max="360" step="0.1" value="0" readonly></label></div>
-                        <p class="cad-warning">제품 각도는 레거시 데이터 확인용 읽기전용입니다. 실제 제품 회전/틸팅 자세는 도면 캘리브레이션 탭에서 설정합니다.</p>
+                        <p class="cad-warning">제품 각도는 레시피·포인트 화면의 제품 자세 보정 또는 도면 캘리브레이션에서 변경합니다.</p>
                         <div class="toolbar"><button id="newManagedRecipe" type="button">새 레시피</button><button type="submit">저장</button><button id="deleteManagedRecipe" type="button" class="danger">삭제</button></div>
                     </form>
                 </div>

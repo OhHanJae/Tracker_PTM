@@ -377,8 +377,12 @@ def predict_product_pose(
     tilt_axis: int,
     rotation_deg: float,
     tilt_deg: float,
+    translation: Vector3 = (0.0, 0.0, 0.0),
 ) -> tuple[float, float, Vector3]:
-    """Project a rigidly rotated CAD point through the taught motor rays."""
+    """Project a CAD point after rotation, tilt, then drawing-axis translation."""
+    if (not isinstance(translation, (tuple, list)) or len(translation) != 3
+            or any(type(value) not in (int, float) or not math.isfinite(value) for value in translation)):
+        raise CalibrationError("제품 좌표 이동량은 유한한 X/Y/Z 값이어야 합니다.")
     if fit.coordinate_axes is None or fit.projective_coefficients is None:
         raise CalibrationError("제품 자세 보정에는 평면 기준점 캘리브레이션이 필요합니다.")
 
@@ -434,11 +438,14 @@ def predict_product_pose(
             offset[other] * cosine - offset[last] * sine,
             offset[other] * sine + offset[last] * cosine,
         )
+    offset = [offset[axis] + translation[axis] for axis in range(3)]
     transformed = tuple(pivot[axis] + offset[axis] for axis in range(3))
     local = tuple(
         at_pivot[component] + sum(basis[axis][component] * offset[axis] for axis in range(3))
         for component in range(3)
     )
+    if not all(math.isfinite(value) for value in (*transformed, *local)):
+        raise CalibrationError("보정된 좌표가 계산 범위를 벗어났습니다.")
     if local[2] <= 1e-6:
         raise CalibrationError("보정된 포인트가 모터 뒤쪽에 있습니다.")
     direction = _motor_direction_from_image(

@@ -93,7 +93,7 @@ async function loadDrawing(drawing)
             state.viewer.selectPoint(selected.group_id, selected.target_id);
         }
     }
-    state.viewer.setPose(drawing.pose_frame, drawing.product_rotation_deg, drawing.product_tilt_deg);
+    state.viewer.setPose(drawing.pose_frame, drawing.product_rotation_deg, drawing.product_tilt_deg, drawing.product_translation_mm);
     state.viewer.render();
 }
 
@@ -119,7 +119,7 @@ window.addEventListener('drawing-cad-points', event => {
     state.drawing = drawing;
     state.points = viewerPoints(drawing.points);
     state.viewer.setPoints(state.points);
-    state.viewer.setPose(drawing.pose_frame, drawing.product_rotation_deg, drawing.product_tilt_deg);
+    state.viewer.setPose(drawing.pose_frame, drawing.product_rotation_deg, drawing.product_tilt_deg, drawing.product_translation_mm);
 });
 
 window.addEventListener('drawing-cad-select', event => {

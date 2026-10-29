@@ -63,7 +63,8 @@ def test_fvp_upload_does_not_create_or_change_recipes(tmp_path, existing_recipe)
         drawing = drawings.create_from_uploads([("fvp.zip", fvp_archive()[0])])
         assert [group["point_count"] for group in drawing["point_sets"]] == [5, 5, 5]
         assert drawing["selected_recipe_id"] == ""
-        assert recipes.export_document() == before
+        # Export timestamps are generated on read; compare the unchanged document content.
+        assert recipes.export_document() | {"updated": before["updated"]} == before
         assert (recipes.path.read_bytes() if recipes.path.exists() else None) == saved
 
 

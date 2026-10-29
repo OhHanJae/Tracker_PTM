@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import io
 import math
 import re
@@ -743,7 +744,8 @@ class DrawingStore:
                           points: list[dict[str, Any]]) -> dict[str, Any]:
         return {"drawing_id": record["id"], "product_id": record.get("product_id") or record["id"],
                 "point_file": point_file, "points": deepcopy(points), "calibration": None,
-                "product_rotation_deg": 0.0, "product_tilt_deg": 0.0}
+                "product_rotation_deg": 0.0, "product_tilt_deg": 0.0,
+                "product_translation_mm": [0.0, 0.0, 0.0]}
 
     @_drawing_edit
     def select_recipe(self, drawing_id: str, recipe_id: str) -> dict[str, Any]:
@@ -836,8 +838,9 @@ class DrawingStore:
 
         context = self._context(record)
         if any(key in params for key in ("pan", "tilt", "calibration")) and (
-                context.get("product_rotation_deg", 0) or context.get("product_tilt_deg", 0)):
-            raise ValueError("기준점 재티칭은 제품 0°/0°에서 수행하세요.")
+                context.get("product_rotation_deg", 0) or context.get("product_tilt_deg", 0)
+                or any(context.get("product_translation_mm", (0, 0, 0)))):
+            raise ValueError("기준점 재티칭은 제품 0°/0° 및 좌표 이동 0에서 수행하세요.")
         if "calibration" in params:
             requested_calibration = bool(params["calibration"])
             point["calibration"] = requested_calibration
@@ -997,7 +1000,9 @@ class DrawingStore:
         previous_calibration = self._context(record).get("calibration") or {}
         previous_rotation = float(previous_calibration.get("product_rotation_deg", 0.0) or 0.0)
         previous_tilt = float(previous_calibration.get("product_tilt_deg", 0.0) or 0.0)
-        previous_is_zero = abs(previous_rotation) < 1e-9 and abs(previous_tilt) < 1e-9
+        previous_translation = previous_calibration.get("product_translation_mm", (0.0, 0.0, 0.0))
+        previous_is_zero = (abs(previous_rotation) < 1e-9 and abs(previous_tilt) < 1e-9
+                            and all(abs(value) < 1e-9 for value in previous_translation))
 
         reference_points: list[DrawingPoint] = []
         for raw in raw_points:
@@ -1044,8 +1049,20 @@ class DrawingStore:
         *,
         product_rotation_deg: float = 0.0,
         product_tilt_deg: float = 0.0,
+        product_translation_mm: tuple[float, float, float] | None = None,
     ) -> dict[str, Any]:
         record = self._record(drawing_id)
+        if product_translation_mm is None:
+            product_translation_mm = self._context(record).get("product_translation_mm", (0.0, 0.0, 0.0))
+        self._calibrate_record(record, product_rotation_deg, product_tilt_deg, product_translation_mm)
+        record["updated"] = now_iso()
+        self.save()
+        return self._public_record(record, include_points=True)
+
+    def _calibrate_record(
+        self, record: dict[str, Any], product_rotation_deg: float, product_tilt_deg: float,
+        product_translation_mm: tuple[float, float, float],
+    ) -> None:
         product_rotation_deg = float(product_rotation_deg)
         product_tilt_deg = float(product_tilt_deg)
         if (
@@ -1055,10 +1072,16 @@ class DrawingStore:
             or abs(product_tilt_deg) > 360.0
         ):
             raise ValueError("제품 회전/틸팅 각도는 -360..360도 범위여야 합니다.")
+        if (not isinstance(product_translation_mm, (list, tuple)) or len(product_translation_mm) != 3
+                or any(type(value) not in (int, float) or not math.isfinite(value) or abs(value) > 1e6
+                       for value in product_translation_mm)):
+            raise ValueError("제품 좌표 이동량은 유한한 X/Y/Z(mm) 3개이며 ±1000000 범위여야 합니다.")
+        translation = tuple(float(value) for value in product_translation_mm)
 
         zero_pose = (
             abs(product_rotation_deg) < 1e-9
             and abs(product_tilt_deg) < 1e-9
+            and all(abs(value) < 1e-9 for value in translation)
         )
         reference_points = self._reference_calibration_points(
             record,
@@ -1073,6 +1096,7 @@ class DrawingStore:
         for raw in raw_points:
             point = DrawingPoint.from_dict(raw)
             reference = reference_by_id.get(point.id, point)
+            posed = point.position
 
             if zero_pose and point.calibration and reference.has_pan_tilt:
                 pan = float(reference.pan)
@@ -1081,17 +1105,18 @@ class DrawingStore:
                 if zero_pose:
                     pan, tilt = fit.predict(point)
                 else:
-                    pan, tilt, _ = predict_product_pose(
+                    pan, tilt, posed = predict_product_pose(
                         fit, point.position, center, rotation_axis, tilt_axis,
-                        product_rotation_deg, product_tilt_deg,
+                        product_rotation_deg, product_tilt_deg, translation,
                     )
 
             payload = point.to_dict()
-            payload["pan"] = round(float(pan) % 360.0, 2)
+            payload["pan"] = round(float(pan) % 360.0, 2) % 360.0
             payload["tilt"] = round(max(-60.0, min(60.0, float(tilt))), 2)
             for key in CAD_POINT_METADATA:
                 if key in raw:
                     payload[key] = raw[key]
+            payload["posed_position"] = [round(value, 6) for value in posed]
             calibrated_points.append(payload)
 
         self._set_points(record, calibrated_points)
@@ -1106,6 +1131,7 @@ class DrawingStore:
             "scale": fit.scale,
             "product_rotation_deg": product_rotation_deg,
             "product_tilt_deg": product_tilt_deg,
+            "product_translation_mm": list(translation),
             "product_center": [round(value, 6) for value in center],
             "product_spans": [round(value, 6) for value in spans],
             "rotation_axis": self._pose_axis_name(rotation_axis),
@@ -1115,14 +1141,77 @@ class DrawingStore:
         context = self._context(record)
         context["product_rotation_deg"] = product_rotation_deg
         context["product_tilt_deg"] = product_tilt_deg
+        context["product_translation_mm"] = list(translation)
         context["calibration"] = calibration
         if context is record and record.get("source_kind") in CAD_PACKAGE_KINDS:
             record.setdefault("calibration_by_file", {})[
                 str(record.get("selected_point_file") or "")
             ] = calibration
-        record["updated"] = now_iso()
-        self.save()
-        return self._public_record(record, include_points=True)
+
+    @staticmethod
+    def _recipe_pose_revision(recipe) -> str:
+        payload = recipe.to_dict()
+        payload["drawing"].pop("pose_undo", None)
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False, allow_nan=False).encode("utf-8")).hexdigest()
+
+    @_drawing_edit
+    def apply_recipe_pose(
+        self, recipe_id: str, *, product_rotation_deg: float = 0.0, product_tilt_deg: float = 0.0,
+        product_translation_mm: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    ) -> dict[str, Any]:
+        if self.recipe_store is None:
+            raise ValueError("레시피 저장소가 필요합니다.")
+        recipe = self.recipe_store.get_recipe(recipe_id)
+        context = recipe.drawing
+        if not context or not context.get("calibration") or not recipe.points:
+            raise CalibrationError("도면 좌표와 캘리브레이션을 연결하고 레시피에 포인트를 저장한 뒤 보정하세요.")
+        record = self._record(context["drawing_id"])
+        shadow = dict(record, selected_recipe_id=recipe.id, selected_point_file=context["point_file"])
+        if (self._context(shadow) is not context or context.get("product_id") != record.get("product_id")
+                or context["point_file"] not in record.get("points_by_file", {})):
+            raise ValueError("레시피의 도면/그룹 연결을 확인하세요.")
+        originals = {point["id"]: point for point in record["points_by_file"][context["point_file"]]}
+        if any(point["id"] not in originals or any(point[key] != originals[point["id"]][key]
+                   for key in ("x", "y", "z")) for point in context["points"]):
+            raise ValueError("레시피 좌표가 원본 CAD 그룹과 다릅니다.")
+        snapshot = recipe.to_dict()
+        snapshot["drawing"].pop("pose_undo", None)
+        self._calibrate_record(shadow, product_rotation_deg, product_tilt_deg, product_translation_mm)
+        targets = {point["id"]: point for point in context["points"]}
+        for point in recipe.points:
+            if point.drawing_point_id not in targets:
+                raise CalibrationError(f"도면 XYZ 좌표가 없는 포인트는 보정할 수 없습니다: {point.name}")
+            target = targets[point.drawing_point_id]
+            point.pan, point.tilt = target["pan"], target["tilt"]
+            point.updated = now_iso()
+        recipe.product_rotation_deg = float(product_rotation_deg)
+        recipe.product_tilt_deg = float(product_tilt_deg)
+        recipe.pose_applied = True
+        recipe.updated = now_iso()
+        context["pose_undo"] = {"previous": snapshot, "applied_revision": self._recipe_pose_revision(recipe)}
+        self.recipe_store.save()
+        return recipe.to_dict()
+
+    @_drawing_edit
+    def undo_recipe_pose(self, recipe_id: str) -> dict[str, Any]:
+        if self.recipe_store is None:
+            raise ValueError("레시피 저장소가 필요합니다.")
+        recipe = self.recipe_store.get_recipe(recipe_id)
+        undo = recipe.drawing.get("pose_undo")
+        if not isinstance(undo, dict) or not isinstance(undo.get("previous"), dict):
+            raise ValueError("되돌릴 제품 자세 보정이 없습니다.")
+        if undo.get("applied_revision") != self._recipe_pose_revision(recipe):
+            raise ValueError("보정 후 레시피가 변경되어 되돌릴 수 없습니다. 현재 편집 내용을 먼저 확인하세요.")
+        document = self.recipe_store.export_document(recipe.id)
+        document["recipes"] = [undo["previous"]]
+        restored = self.recipe_store._validated_document(document)[0]
+        if restored.id != recipe.id or any(restored.drawing.get(key) != recipe.drawing.get(key)
+                                           for key in ("drawing_id", "product_id", "point_file")):
+            raise ValueError("되돌리기 데이터의 레시피/도면이 일치하지 않습니다.")
+        restored.updated = now_iso()
+        self.recipe_store._recipes = [restored if item.id == recipe.id else item for item in self.recipe_store._recipes]
+        self.recipe_store.save()
+        return restored.to_dict()
 
     @_drawing_edit
     def reset_calibration(self, drawing_id: str) -> dict[str, Any]:
@@ -1144,6 +1233,8 @@ class DrawingStore:
         context["calibration"] = None
         context["product_rotation_deg"] = 0.0
         context["product_tilt_deg"] = 0.0
+        context["product_translation_mm"] = [0.0, 0.0, 0.0]
+        context.pop("pose_undo", None)
         if context is not record:
             recipe = self.recipe_store.get_recipe(record["selected_recipe_id"])
             recipe.product_rotation_deg = recipe.product_tilt_deg = 0.0
@@ -1201,16 +1292,17 @@ class DrawingStore:
         context = self._context(record)
         product_rotation_deg = float(context.get("product_rotation_deg", 0.0) or 0.0)
         product_tilt_deg = float(context.get("product_tilt_deg", 0.0) or 0.0)
+        translation = context.get("product_translation_mm", (0.0, 0.0, 0.0))
         posed, frame = self._posed_product_position(
             record,
             (float(x), float(y), target_z),
             product_rotation_deg,
             product_tilt_deg,
         )
-        if product_rotation_deg or product_tilt_deg:
+        if product_rotation_deg or product_tilt_deg or any(translation):
             pan, tilt, posed = predict_product_pose(
                 fit, (float(x), float(y), target_z), frame["center"],
-                frame["rotation_axis"], frame["tilt_axis"], product_rotation_deg, product_tilt_deg,
+                frame["rotation_axis"], frame["tilt_axis"], product_rotation_deg, product_tilt_deg, translation,
             )
         else:
             pan, tilt = fit.predict(DrawingPoint.create(posed))
@@ -1225,6 +1317,7 @@ class DrawingStore:
             "posed_z": posed[2],
             "product_rotation_deg": product_rotation_deg,
             "product_tilt_deg": product_tilt_deg,
+            "product_translation_mm": list(translation),
             "rotation_axis": self._pose_axis_name(frame["rotation_axis"]),
             "tilt_axis": self._pose_axis_name(frame["tilt_axis"]),
             "points_used": fit.points_used,
@@ -1312,7 +1405,7 @@ class DrawingStore:
             raise ValueError("저장할 Pan/Tilt 값이 없습니다. 기준점을 티칭하고 캘리브레이션하세요.")
         if record.get("source_kind") in CAD_PACKAGE_KINDS:
             state = self._new_recipe_state(record, record["selected_point_file"], self._points(record))
-            for key in ("calibration", "product_rotation_deg", "product_tilt_deg"):
+            for key in ("calibration", "product_rotation_deg", "product_tilt_deg", "product_translation_mm"):
                 state[key] = deepcopy(context.get(key, state[key]))
             updated.drawing = state
             updated.product_rotation_deg = state["product_rotation_deg"]
@@ -1439,6 +1532,7 @@ class DrawingStore:
             "selected_recipe_id": record.get("selected_recipe_id", "") if context is not record else "",
             "product_rotation_deg": float(context.get("product_rotation_deg", 0.0) or 0.0),
             "product_tilt_deg": float(context.get("product_tilt_deg", 0.0) or 0.0),
+            "product_translation_mm": list(context.get("product_translation_mm", (0.0, 0.0, 0.0))),
             "point_count": len(record.get("points") or []),
             "deletable": True,
             "order": int(record.get("order") or 0),
@@ -1465,7 +1559,8 @@ class DrawingStore:
                 for index, point in enumerate(self._points(record), start=1)
             ]
         if self.recipe_store is not None and record.get("source_kind") in CAD_PACKAGE_KINDS and context is record:
-            result.update(calibration=None, product_rotation_deg=0.0, product_tilt_deg=0.0)
+            result.update(calibration=None, product_rotation_deg=0.0, product_tilt_deg=0.0,
+                          product_translation_mm=[0.0, 0.0, 0.0])
             for point in result.get("points", []):
                 point.update(pan=None, tilt=None, calibration=False, calibration_slot=None)
         return result

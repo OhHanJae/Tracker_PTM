@@ -489,8 +489,9 @@ class RecipeStore:
                                   if item["id"] == point.drawing_point_id), None)
             changed_angles = point.pan != float(pan) % 360 or point.tilt != float(tilt)
             if drawing_point is not None and changed_angles and drawing_point.get("calibration") and (
-                    recipe.drawing.get("product_rotation_deg") or recipe.drawing.get("product_tilt_deg")):
-                raise ValueError("기준점 재티칭은 제품 0°/0°에서 수행하세요.")
+                    recipe.drawing.get("product_rotation_deg") or recipe.drawing.get("product_tilt_deg")
+                    or any(recipe.drawing.get("product_translation_mm", (0, 0, 0)))):
+                raise ValueError("기준점 재티칭은 제품 0°/0° 및 좌표 이동 0에서 수행하세요.")
             point.name = name
             point.pan = float(pan) % 360.0
             point.tilt = max(-60.0, min(60.0, float(tilt)))
@@ -650,6 +651,13 @@ class RecipeStore:
                 raise ValueError("drawing point calibration must be boolean")
         for key in ("product_rotation_deg", "product_tilt_deg"):
             cls._finite_number(drawing, key, "recipe drawing", minimum=-360, maximum=360)
+        if "product_translation_mm" in drawing:
+            translation = drawing["product_translation_mm"]
+            if not isinstance(translation, list) or len(translation) != 3:
+                raise ValueError("recipe drawing product_translation_mm must contain X/Y/Z")
+            for value in translation:
+                cls._finite_number({"value": value}, "value", "recipe drawing product_translation_mm",
+                                   minimum=-1e6, maximum=1e6)
         if drawing.get("calibration") is not None and not isinstance(drawing["calibration"], dict):
             raise ValueError("invalid recipe drawing calibration")
 
