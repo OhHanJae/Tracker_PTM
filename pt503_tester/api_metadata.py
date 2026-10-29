@@ -181,6 +181,9 @@ COMMAND_TEMPLATES: dict[str, dict[str, Any]] = {
     "drawing.reorder": {"ordered_ids": []},
     "drawing.select_point_set": {"drawing_id": "", "point_file": ""},
     "drawing.select_recipe": {"drawing_id": "", "recipe_id": ""},
+    "drawing.assembly_setup": {"drawing_id": "", "recipe_id": "", "setup": {}},
+    "drawing.servo_preview": {"drawing_id": "", "recipe_id": "", "servo_xyz": [0, 0, 0],
+                              "product_rotation_deg": 0.0, "product_tilt_deg": 0.0},
     "drawing.point_upsert": {
         "drawing_id": "",
         "point_id": "",

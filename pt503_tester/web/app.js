@@ -627,6 +627,8 @@ function drawingAction(fn, options)
             '#drawings .drawing-calibration-actions button, #drawingPoints input, #drawingPointSets input, ' +
             '#loadDrawing, #manageDrawings, #drawingSelect, #drawingActiveRecipe, #newDrawingRecipe, ' +
             '#drawingProductRotation, #drawingProductTilt, #drawingRecipeDialog button, ' +
+            '#drawingAssemblySettings input, #drawingAssemblySettings select, #drawingAssemblySettings button, ' +
+            '#drawingServoSetup input, #drawingServoSetup button, ' +
             '#drawingRecipeDialog input, #drawingRecipeDialog select, #drawingManagerDialog button, #drawingManagerDialog input'));
         const disabled = controls.map(control => [control, control.disabled]);
         const show = (message, kind) => {
@@ -5559,11 +5561,106 @@ function renderDrawingPanel()
     renderDrawingPointSets();
     renderDrawingPoints();
     renderDrawingRecipeSelector();
+    renderAssemblySetup();
     renderPoints();
     window.dispatchEvent(new CustomEvent('drawing-cad-points', {
         detail: {drawing: activeDrawing}
     }));
 }
+
+let assemblyDirty = false;
+let assemblyRecipeKey = '';
+const assemblyVectors = {product_origin_mm: 'assemblyProduct', operator_position_mm: 'assemblyWorker',
+    ptm_position_mm: 'assemblyPtm', servo_reference_raw: 'servoReference', servo_mm_per_unit: 'servoScale'};
+
+function renderAssemblySetup()
+{
+    const key = `${activeDrawing?.id}:${activeDrawing?.selected_recipe_id}`;
+    if (key !== assemblyRecipeKey) { assemblyDirty = false; assemblyRecipeKey = key; }
+    const setup = activeDrawing?.assembly_setup;
+    if (setup && !assemblyDirty)
+    {
+        for (const [name, prefix] of Object.entries(assemblyVectors))
+            ['X', 'Y', 'Z'].forEach((axis, index) => { $(prefix + axis).value = setup[name]?.[index] ?? ''; });
+        $('assemblyWorkerHeight').value = setup.operator_height_mm;
+        $('assemblyPtmMode').value = setup.ptm_mode;
+    }
+    const ready = Boolean(activeDrawing?.selected_recipe_id && setup);
+    for (const id of ['saveAssemblySetup', 'saveServoSetup', 'previewAssemblySetup', 'placePtmInFront', 'previewServoSetup'])
+        $(id).disabled = !ready || drawingActionBusy;
+    if (!ready) $('assemblySetupStatus').textContent = activeDrawing?.selected_recipe_id && !setup
+        ? '작업 기준 설정 응답이 없습니다. PTM 서버를 갱신·재시작한 뒤 도면을 다시 불러오세요.'
+        : '작업 기준 설정을 저장하려면 도면 그룹과 레시피를 선택하세요.';
+}
+
+function assemblyValues()
+{
+    const setup = {};
+    for (const [name, prefix] of Object.entries(assemblyVectors))
+        setup[name] = ['X', 'Y', 'Z'].map(axis => {
+            const value = $(prefix + axis).value.trim();
+            if (name === 'servo_mm_per_unit' && value === '') return null;
+            if (value === '' || !Number.isFinite(Number(value))) throw Error('작업 기준 XYZ와 서보 기준값을 확인하세요.');
+            const number = Number(value);
+            if (Math.abs(number) > (name === 'servo_reference_raw' ? 1e12 : 1e6) || (name === 'servo_mm_per_unit' && number === 0))
+                throw Error('좌표 범위 또는 서보 환산계수(0 사용 불가)를 확인하세요.');
+            return number;
+        });
+    setup.operator_height_mm = Number($('assemblyWorkerHeight').value);
+    if (!Number.isFinite(setup.operator_height_mm) || setup.operator_height_mm < 500 || setup.operator_height_mm > 2500)
+        throw Error('작업자 키는 500~2500mm로 입력하세요.');
+    setup.ptm_mode = $('assemblyPtmMode').value;
+    return setup;
+}
+
+for (const id of ['drawingAssemblySettings', 'drawingServoSetup'])
+    $(id).addEventListener('input', event => { if (!event.target.id.startsWith('servoRaw')) assemblyDirty = true; });
+
+async function saveAssemblyValues()
+{
+    const result = await cmd('drawing.assembly_setup', {drawing_id: activeDrawing.id,
+        recipe_id: activeDrawing.selected_recipe_id, setup: assemblyValues()}, true);
+    activeDrawing = result.drawing;
+    assemblyDirty = false;
+    await loadRecipes(activeDrawing.selected_recipe_id);
+    renderDrawingPanel();
+    $('assemblySetupStatus').textContent = '선택 레시피의 작업 기준·PTM 표시·서보 준비 설정을 저장했습니다.';
+    $('servoSetupStatus').textContent = '환산 설정 저장 완료 · 자동 적용은 꺼짐';
+}
+
+$('saveAssemblySetup').onclick = drawingAction(saveAssemblyValues, {pending: '작업 기준 저장 중…', done: '작업 기준 저장 완료'});
+$('saveServoSetup').onclick = drawingAction(saveAssemblyValues, {pending: '서보 준비 설정 저장 중…', done: '서보 준비 설정 저장 완료'});
+$('previewAssemblySetup').onclick = guarded(() => {
+    if (!activeDrawing) return;
+    const setup = assemblyValues();
+    const ptm = setup.ptm_mode === 'manual' ? {position_mm: setup.ptm_position_mm, right: [1, 0, 0],
+        up: [0, 1, 0], forward: [0, 0, 1], estimated: false, source: 'manual_display'} : activeDrawing.ptm_calibrated_pose;
+    window.dispatchEvent(new CustomEvent('drawing-cad-points', {detail: {drawing: {...activeDrawing,
+        assembly_setup: setup, ptm_pose: ptm, camera_pose: ptm, scene_preview: true}}}));
+    $('assemblySetupStatus').textContent = '미저장 표시 미리보기입니다. 포인트 이동값과 제품 기준은 아직 변경하지 않았습니다.';
+});
+$('cancelAssemblySetup').onclick = () => { assemblyDirty = false; renderDrawingPanel(); $('assemblySetupStatus').textContent = '저장된 기준으로 복원했습니다.'; };
+$('placePtmInFront').onclick = () => {
+    const setup = assemblyValues();
+    for (let index = 0; index < 3; index++)
+        $('assemblyPtm' + 'XYZ'[index]).value = index === 2 ? setup.product_origin_mm[2] + 250
+            : setup.product_origin_mm[index] + (setup.operator_position_mm[index] - setup.product_origin_mm[index]) * 0.65;
+    $('assemblyPtmMode').value = 'manual';
+    assemblyDirty = true;
+    $('previewAssemblySetup').click();
+};
+$('previewServoSetup').onclick = guarded(async () => {
+    if (assemblyDirty) throw Error('작업 기준/환산 설정을 먼저 저장한 뒤 계산 미리보기를 실행하세요.');
+    const result = await cmd('drawing.servo_preview', {drawing_id: activeDrawing.id, recipe_id: activeDrawing.selected_recipe_id,
+        servo_xyz: ['X', 'Y', 'Z'].map(axis => {
+            const value = $('servoRaw' + axis).value.trim();
+            if (value === '' || !Number.isFinite(Number(value))) throw Error('서보 원시값 X/Y/Z를 입력하세요.');
+            return Number(value);
+        }), ...drawingPoseValues()}, true);
+    $('servoSetupStatus').textContent = result.ready
+        ? `회전된 XYZ(mm): ${result.transformed_xyz_mm.map(value => value.toFixed(3)).join(', ')}\n보정 원시값(미리보기): ${result.compensated_raw.map(value => value.toFixed(3)).join(', ')}\n준비 전용 · 실제 장치/포인트 자동 적용 없음`
+        : result.reason;
+});
 
 function compatibleDrawingRecipes()
 {

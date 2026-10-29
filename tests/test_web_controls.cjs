@@ -25,6 +25,7 @@ const {chromium} = require('playwright');
     let recipeList = [];
     let recipePoseBackup = null;
     let failRecipePose = false;
+    let assemblyDrawing = null;
     let drawingList = [{id: 'first', name: 'First'}, {id: 'second', name: 'Second'}];
     const commandNames = ['system.ping', 'serial.scan', 'motion.absolute', 'point.goto', 'laser.on',
         'drawing.select_recipe', 'home.start', 'home.after', 'home.time', 'pelco.flip',
@@ -78,6 +79,15 @@ const {chromium} = require('playwright');
             }
             if (command === 'laser.pulse' && params.test_token) { state.laser.on = true; return json({laser_on: true}); }
             if (command === 'recipe.list') return json({recipes: recipeList});
+            if (command === 'drawing.assembly_setup') {
+                assert.equal(params.recipe_id, 'assembly-recipe');
+                assemblyDrawing = {...assemblyDrawing, assembly_setup: params.setup};
+                return json({drawing: assemblyDrawing});
+            }
+            if (command === 'drawing.servo_preview') {
+                assert.deepEqual(params.servo_xyz, [100, 20, 30]);
+                return json({ready: true, automatic_enabled: false, transformed_xyz_mm: [10, 2, 3], compensated_raw: [100, 20, 30]});
+            }
             if (command === 'recipe.pose_apply') {
                 if (failRecipePose) return route.fulfill({json: {ok: false, error: {message: 'pose rejected'}}});
                 assert.deepEqual(params, {recipe_id: 'pose-recipe', product_rotation_deg: 15,
@@ -362,6 +372,41 @@ const {chromium} = require('playwright');
         await page.reload();
         await page.waitForFunction(() => window.sent.some(item => item.command === 'drawing.list'));
         assert.equal((await sent('drawing.get')).length, 0, 'empty drawing list does not request a drawing');
+        await page.setViewportSize({width: 1440, height: 1000});
+        assemblyDrawing = {id: 'assembly', name: 'Assembly fixture', product_id: 'product',
+            selected_point_file: 'group.json', selected_recipe_id: 'assembly-recipe',
+            coordinate_frame: 'PRODUCT_CAD_STEP_NATIVE', units: 'mm', model_rendering: {model_units_per_mm: 0.1},
+            points: [], point_sets: [{file: 'group.json', name: 'Group'}], calibration: null,
+            assembly_setup: {product_origin_mm: [0, 0, 0], operator_position_mm: [0, -1000, -300],
+                operator_height_mm: 1700, ptm_mode: 'calibrated', ptm_position_mm: [0, -650, 250],
+                servo_reference_raw: [0, 0, 0], servo_mm_per_unit: [null, null, null], automatic_enabled: false}};
+        recipeList = [{id: 'assembly-recipe', name: 'Assembly recipe', index: 1, points: [],
+            drawing: {product_id: 'product', point_file: 'group.json', points: []}}];
+        await page.evaluate(async drawing => {
+            activeDrawing = drawing;
+            await loadRecipes('assembly-recipe');
+            renderDrawingPanel();
+        }, assemblyDrawing);
+        await page.locator('#tabs button').filter({hasText: '도면 캘리브레이션'}).click();
+        await page.locator('#drawingAssemblySettings summary').click();
+        await clear();
+        await page.locator('#placePtmInFront').click();
+        assert.equal(await page.locator('#assemblyPtmMode').inputValue(), 'manual');
+        assert.equal(await page.locator('#assemblyPtmY').inputValue(), '-650');
+        assert.equal((await sent('drawing.assembly_setup')).length, 0, 'manual PTM preview remains local');
+        await page.locator('#saveAssemblySetup').click();
+        await page.waitForFunction(() => !drawingActionBusy && $('assemblySetupStatus').textContent.includes('저장'));
+        await page.locator('#drawingServoSetup summary').click();
+        for (const axis of 'XYZ') await page.locator('#servoScale' + axis).fill('0.1');
+        await page.locator('#saveServoSetup').click();
+        await page.waitForFunction(() => !drawingActionBusy && $('servoSetupStatus').textContent.includes('저장 완료'));
+        for (const [axis, value] of [['X', '100'], ['Y', '20'], ['Z', '30']])
+            await page.locator('#servoRaw' + axis).fill(value);
+        await page.locator('#previewServoSetup').click();
+        await page.waitForFunction(() => $('servoSetupStatus').textContent.includes('실제 장치/포인트 자동 적용 없음'));
+        assert.equal((await sent('point.goto')).length, 0);
+        assert.equal((await sent('motion.absolute')).length, 0);
+        assert.equal((await sent('laser.on')).length, 0);
         assert.deepEqual(errors, []);
         console.log('PASS: browser two-point test session/renewal/cleanup, remote ownership UI, protocol, drawings, gamepad STOP/focus/reconnect and mobile layout');
     } catch (error) {

@@ -23,10 +23,10 @@ export function makeProductPoseMatrix(frame, rotation = 0, tilt = 0, translation
     {
         const pivot = new THREE.Vector3(...frame.center).multiplyScalar(MODEL_UNITS_PER_MM);
         const axis = index => new THREE.Vector3(...[0, 1, 2].map(value => value === index ? 1 : 0));
-        const yaw = new THREE.Matrix4().makeRotationAxis(axis(frame.rotation_axis), THREE.MathUtils.degToRad(rotation));
-        const pitch = new THREE.Matrix4().makeRotationAxis(axis(frame.tilt_axis), THREE.MathUtils.degToRad(tilt));
+        const yaw = new THREE.Matrix4().makeRotationAxis(axis(frame.rotation_axis), THREE.MathUtils.degToRad(rotation * (frame.rotation_sign ?? 1)));
+        const pitch = new THREE.Matrix4().makeRotationAxis(axis(frame.tilt_axis), THREE.MathUtils.degToRad(tilt * (frame.tilt_sign ?? 1)));
         matrix.makeTranslation(pivot.x, pivot.y, pivot.z);
-        if (frame.convention === 'floor_yaw_long_tilt_v1') matrix.multiply(yaw).multiply(pitch);
+        if (['floor_yaw_long_tilt_v1', 'operator_clockwise_v1'].includes(frame.convention)) matrix.multiply(yaw).multiply(pitch);
         else matrix.multiply(pitch).multiply(yaw);
         matrix.multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
     }
@@ -115,6 +115,7 @@ export async function createStandaloneViewer({
     canvas,
     pointLayer,
     ptmLabel = null,
+    operatorLabel = null,
     modelUrl,
     points = [],
     onSelect = null
@@ -209,9 +210,70 @@ export async function createStandaloneViewer({
     let laserLine = null;
     let laserTarget = null;
     let ptmUnit = 0;
+    const worker = new THREE.Group();
+    scene.add(worker);
+    let assembly = null;
+    let assemblyKey = '';
+    let workerHeight = 170;
+    let workerEye = new THREE.Vector3();
     let poseKey = '';
     let axesKey = '';
-    const sceneOptions = {floor: true, ptm: true, axes: true};
+    const sceneOptions = {floor: true, ptm: true, axes: true, worker: true};
+
+    function setAssembly(value)
+    {
+        const key = JSON.stringify(value || null);
+        if (key === assemblyKey) return;
+        assemblyKey = key;
+        assembly = value;
+        disposeObject(worker);
+        worker.clear();
+        worker.visible = Boolean(value) && sceneOptions.worker;
+        if (value)
+        {
+            workerHeight = Number(value.operator_height_mm) * MODEL_UNITS_PER_MM;
+            worker.position.fromArray(value.operator_position_mm).multiplyScalar(MODEL_UNITS_PER_MM);
+            const target = new THREE.Vector3(...value.product_origin_mm).multiplyScalar(MODEL_UNITS_PER_MM);
+            const direction = target.clone().sub(worker.position);
+            worker.rotation.z = Math.atan2(-direction.x, direction.y);
+            const clothing = new THREE.MeshStandardMaterial({color: 0x68b88f, roughness: 0.8});
+            const skin = new THREE.MeshStandardMaterial({color: 0xe2b18b, roughness: 0.85});
+            const headPivot = new THREE.Group();
+            headPivot.position.z = workerHeight * 0.91;
+            const head = new THREE.Mesh(new THREE.SphereGeometry(workerHeight * 0.075, 18, 12), skin);
+            const body = new THREE.Mesh(new THREE.CylinderGeometry(workerHeight * 0.11, workerHeight * 0.095,
+                workerHeight * 0.32, 14), clothing);
+            body.rotation.x = Math.PI / 2;
+            body.position.z = workerHeight * 0.65;
+            worker.add(headPivot, body);
+            const nose = new THREE.Mesh(new THREE.ConeGeometry(workerHeight * 0.025, workerHeight * 0.06, 10), skin);
+            nose.position.y = workerHeight * 0.078;
+            headPivot.add(head, nose);
+            const localTarget = target.clone().sub(worker.position).applyQuaternion(worker.quaternion.clone().invert());
+            const headDirection = localTarget.clone().sub(headPivot.position);
+            headPivot.rotation.x = Math.atan2(headDirection.z, Math.hypot(headDirection.x, headDirection.y));
+            for (const side of [-1, 1])
+            {
+                const leg = new THREE.Mesh(new THREE.CylinderGeometry(workerHeight * 0.035, workerHeight * 0.03,
+                    workerHeight * 0.44, 10), clothing);
+                leg.rotation.x = Math.PI / 2;
+                leg.position.set(side * workerHeight * 0.055, 0, workerHeight * 0.25);
+                const arm = new THREE.Mesh(new THREE.CylinderGeometry(workerHeight * 0.025, workerHeight * 0.025,
+                    workerHeight * 0.30, 10), clothing);
+                arm.rotation.x = Math.PI / 2;
+                arm.position.set(side * workerHeight * 0.145, 0, workerHeight * 0.64);
+                worker.add(leg, arm);
+            }
+            workerEye.copy(worker.position).add(new THREE.Vector3(0, 0, workerHeight * 0.94));
+            const guideOrigin = new THREE.Vector3(0, workerHeight * 0.1, workerHeight * 0.72);
+            const guide = new THREE.ArrowHelper(localTarget.clone().sub(guideOrigin).normalize(),
+                guideOrigin, radius * 0.35,
+                0x68df99, radius * 0.05, radius * 0.025);
+            worker.add(guide);
+        }
+        fitModel(camera.position.clone().sub(controls.target));
+        render();
+    }
 
     function updateDirections(frame, translation)
     {
@@ -324,6 +386,7 @@ export async function createStandaloneViewer({
         if (direction.lengthSq() < 1e-12) direction = DEFAULT_DIRECTION;
         const viewBounds = bounds.clone().applyMatrix4(poseMatrix);
         if (ptmPose && sceneOptions.ptm) viewBounds.expandByPoint(mockPtm.position);
+        if (assembly && sceneOptions.worker) viewBounds.expandByPoint(worker.position).expandByPoint(workerEye);
         const viewCenter = viewBounds.getCenter(new THREE.Vector3());
         const viewRadius = Math.max(viewBounds.getSize(new THREE.Vector3()).length() * 0.5, radius);
         const rect = canvas.getBoundingClientRect();
@@ -400,6 +463,14 @@ export async function createStandaloneViewer({
             ptmLabel.style.left = `${(projected.x * 0.5 + 0.5) * rect.width}px`;
             ptmLabel.style.top = `${(0.5 - projected.y * 0.5) * rect.height}px`;
         }
+        if (operatorLabel)
+        {
+            const projected = workerEye.clone().project(camera);
+            operatorLabel.hidden = !worker.visible || projected.z < -1 || projected.z > 1 ||
+                Math.abs(projected.x) > 1 || Math.abs(projected.y) > 1;
+            operatorLabel.style.left = `${(projected.x * 0.5 + 0.5) * rect.width}px`;
+            operatorLabel.style.top = `${(0.5 - projected.y * 0.5) * rect.height}px`;
+        }
         for (const item of markers)
         {
             const xyz = item.point.xyz_mm || [];
@@ -431,6 +502,7 @@ export async function createStandaloneViewer({
         }
         resize();
         const moving = controls.update();
+        worker.visible = Boolean(assembly) && sceneOptions.worker && camera.position.distanceTo(workerEye) > workerHeight * 0.15;
         updatePtmDirection();
         renderer.render(scene, camera);
         updatePointMarkers();
@@ -543,12 +615,14 @@ export async function createStandaloneViewer({
             render();
         },
         setPtmPose,
+        setAssembly,
         setSceneOptions(value)
         {
             Object.assign(sceneOptions, value);
             floor.visible = sceneOptions.floor;
             directions.visible = verticalAxis.visible = sceneOptions.axes;
             mockPtm.visible = Boolean(ptmPose) && sceneOptions.ptm;
+            worker.visible = Boolean(assembly) && sceneOptions.worker;
             render();
         },
         setPoints(value)
@@ -568,7 +642,13 @@ export async function createStandaloneViewer({
         },
         setPreset(name)
         {
-            if (name === 'reset')
+            if (name === 'operator' && assembly)
+            {
+                camera.position.copy(workerEye);
+                controls.target.fromArray(assembly.product_origin_mm).multiplyScalar(MODEL_UNITS_PER_MM);
+                controls.update();
+            }
+            else if (name === 'reset')
             {
                 fitModel();
             }
@@ -594,8 +674,9 @@ export async function createStandaloneViewer({
             controls.dispose();
             pointLayer.replaceChildren();
             if (ptmLabel) ptmLabel.hidden = true;
+            if (operatorLabel) operatorLabel.hidden = true;
             scene.remove(poseRoot);
-            for (const object of [poseRoot, floor, verticalAxis, mockPtm])
+            for (const object of [poseRoot, floor, verticalAxis, mockPtm, worker])
             {
                 scene.remove(object);
                 disposeObject(object);

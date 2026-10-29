@@ -66,17 +66,21 @@ function updateScene(drawing)
     const ptm = drawing.ptm_pose ?? drawing.camera_pose;
     state.viewer.setPose(drawing.pose_frame, drawing.product_rotation_deg, drawing.product_tilt_deg, drawing.product_translation_mm);
     state.viewer.setPtmPose(ptm);
+    state.viewer.setAssembly(drawing.assembly_setup || null);
     state.viewer.setSceneOptions({floor: byId('cadFloor').checked, ptm: byId('cadPtm').checked,
-        axes: byId('cadAxes').checked});
+        axes: byId('cadAxes').checked, worker: byId('cadOperator').checked});
     const frame = drawing.pose_frame || {};
     const longAxis = 'XYZ'[frame.tilt_axis] || 'X';
-    const legacy = frame.convention === 'legacy_world_axes';
+    const legacy = frame.convention !== 'operator_clockwise_v1';
     byId('cadSceneStatus').textContent = [
         `${legacy ? '기존 회전' : '좌우 회전'} ${Number(drawing.product_rotation_deg || 0).toFixed(1)}° · ${legacy ? '기존 틸팅' : '긴축 틸팅'} ${Number(drawing.product_tilt_deg || 0).toFixed(1)}°`,
         `청록: ${legacy ? '기존 틸트축' : '제품 긴축'}(+${longAxis}) / 중심 틸트축 · 노랑: 바닥 수직(+Z) · 바닥면: 표시 기준`,
-        ptm ? `PTM 레이저 기준점 XYZ(mm): ${ptm.position_mm.map(value => Number(value).toFixed(1)).join(', ')} · 기준점 각도 보정 추정`
+        ptm ? `PTM 레이저 기준점 XYZ(mm): ${ptm.position_mm.map(value => Number(value).toFixed(1)).join(', ')} · ${ptm.source === 'manual_display' ? '수동 표시 위치' : '기준점 각도 보정 추정'}`
             : 'PTM 레이저 모듈: 레시피 기준점 캘리브레이션 후 자동 표시',
         ptm ? '빨강: 선택 포인트 방향의 모의 조사선 · 실제 레이저 ON 표시 아님' : '',
+        frame.convention === 'operator_clockwise_v1' ? '+ 회전: 위에서 시계방향 · + 틸팅: 제품 전면이 작업자쪽' : '',
+        ptm?.source === 'manual_display' ? 'PTM 위치: 수동 표시 · 실제 보정계산은 기준점 캘리브레이션 사용' : '',
+        drawing.scene_preview ? '작업자·PTM 표시 미리보기 (미저장)' : '',
         legacy ? '이전 축으로 저장된 자세: 기존 이동값 유지 중 · 새 축 적용 시 자세 보정을 다시 적용하세요.' : '',
     ].filter(Boolean).join('\n');
 }
@@ -95,6 +99,7 @@ async function loadDrawing(drawing)
             canvas: byId('cadCanvas'),
             pointLayer: byId('cadPointLayer'),
             ptmLabel: byId('cadPtmLabel'),
+            operatorLabel: byId('cadOperatorLabel'),
             modelUrl,
             points: state.points,
             onSelect: point => showPoint(point)
@@ -143,7 +148,7 @@ window.addEventListener('drawing-cad-points', event => {
     updateScene(drawing);
 });
 
-for (const id of ['cadFloor', 'cadPtm', 'cadAxes'])
+for (const id of ['cadFloor', 'cadPtm', 'cadAxes', 'cadOperator'])
 {
     byId(id).addEventListener('change', () => {
         if (state.viewer && state.drawing) updateScene(state.drawing);

@@ -140,6 +140,8 @@ LASER_API_COMMANDS = {
 }
 PTM_SETTINGS_COMMANDS = {'ptm.settings', 'ptm.communication_settings'}
 DRAWING_API_COMMANDS = {
+    'drawing.assembly_setup',
+    'drawing.servo_preview',
     'drawing.list',
     'drawing.get',
     'drawing.delete',
@@ -2349,7 +2351,7 @@ class HeadlessController:
                 "address": self._address,
             }
 
-        if command in {"drawing.point_upsert", "drawing.calibrate", "drawing.reset_calibration",
+        if command in {"drawing.point_upsert", "drawing.calibrate", "drawing.reset_calibration", "drawing.assembly_setup", "drawing.servo_preview",
                        "drawing.estimate_pan_tilt", "drawing.estimate_xy"} and params.get("recipe_id"):
             expected_recipe = self.recipe_store.get_recipe(str(params["recipe_id"])).id
             drawing = self.drawing_store.get_drawing(str(params["drawing_id"]))
@@ -2360,6 +2362,19 @@ class HeadlessController:
             return {"drawings": self.drawing_store.list_drawings()}
         if command == "drawing.get":
             return {"drawing": self.drawing_store.get_drawing(str(params["drawing_id"]))}
+        if command == "drawing.assembly_setup":
+            if not params.get("recipe_id"):
+                raise ValueError("작업 기준 저장에는 recipe_id가 필요합니다.")
+            if (self._pending_motion or self._active_jog is not None or self.scanning or self._auto_scan_active
+                    or self._test_session):
+                raise HeadlessApiError("BUSY", "작업 기준 저장 전에 이동/조그/스캔/시험을 정지하세요.")
+            return {"drawing": self.drawing_store.configure_assembly(str(params["drawing_id"]), params.get("setup"))}
+        if command == "drawing.servo_preview":
+            if not params.get("recipe_id"):
+                raise ValueError("서보 미리보기에는 recipe_id가 필요합니다.")
+            return self.drawing_store.preview_servo(str(params["drawing_id"]), params.get("servo_xyz"),
+                self._float(params, "product_rotation_deg", 0.0, required=False, minimum=-360, maximum=360) or 0.0,
+                self._float(params, "product_tilt_deg", 0.0, required=False, minimum=-360, maximum=360) or 0.0)
         if command == "drawing.delete":
             drawing_id = str(params["drawing_id"])
             self.drawing_store.delete_drawing(drawing_id)

@@ -947,7 +947,15 @@ class DrawingStore:
     def _display_pose_frame(self, record: dict[str, Any]) -> dict[str, Any]:
         center, rotation_axis, tilt_axis, spans = self._product_pose_frame(record)
         calibration = self._context(record).get("calibration") or {}
-        convention = "floor_yaw_long_tilt_v1"
+        convention = "operator_clockwise_v1"
+        rotation_sign, tilt_sign = -1, self._operator_tilt_sign(record, tilt_axis)
+        setup = self._assembly_setup(record)
+        center = setup["product_origin_mm"]
+        if (calibration.get("pose_convention") == "floor_yaw_long_tilt_v1" and
+                (calibration.get("product_rotation_deg") or calibration.get("product_tilt_deg"))):
+            convention = "floor_yaw_long_tilt_v1"
+            rotation_sign = tilt_sign = 1
+            center = calibration.get("product_center", center)
         if (not calibration.get("pose_convention") and
                 (calibration.get("product_rotation_deg") or calibration.get("product_tilt_deg"))):
             # Existing saved motor angles still describe the previous convention.
@@ -957,8 +965,107 @@ class DrawingStore:
             rotation_axis = rotation_axis if rotation_axis >= 0 else axes[0]
             tilt_axis = tilt_axis if tilt_axis >= 0 else axes[1]
             convention = "legacy_world_axes"
+            rotation_sign = tilt_sign = 1
+            center = calibration.get("product_center", center)
         return {"center": list(center), "rotation_axis": rotation_axis, "tilt_axis": tilt_axis,
-                "convention": convention, "spans": list(spans)}
+                "convention": convention, "spans": list(spans),
+                "rotation_sign": rotation_sign, "tilt_sign": tilt_sign}
+
+    def _assembly_setup(self, record: dict[str, Any]) -> dict[str, Any]:
+        center, _, long_axis, spans = self._product_pose_frame(record)
+        short_axis = 1 - long_axis
+        worker = list(center)
+        worker[short_axis] -= spans[short_axis] / 2 + 900
+        worker[2] -= math.sqrt(sum(value * value for value in spans)) * 0.175 + spans[2] / 2
+        ptm = list(center)
+        ptm[short_axis] += (worker[short_axis] - center[short_axis]) * 0.65
+        ptm[2] += 250
+        defaults = {"version": 1, "product_origin_mm": list(center), "operator_position_mm": worker,
+                    "operator_height_mm": 1700.0, "ptm_mode": "calibrated",
+                    "ptm_position_mm": ptm,
+                    "servo_reference_raw": [0.0, 0.0, 0.0], "servo_mm_per_unit": [None, None, None],
+                    "automatic_enabled": False}
+        defaults.update(deepcopy(self._context(record).get("assembly_setup") or {}))
+        defaults["automatic_enabled"] = False
+        return defaults
+
+    def _operator_tilt_sign(self, record: dict[str, Any], long_axis: int) -> int:
+        setup = self._assembly_setup(record)
+        # The +Z front normal must tip toward the worker: X×Z=-Y, Y×Z=+X.
+        short_axis = 1 - long_axis
+        toward = setup["operator_position_mm"][short_axis] - setup["product_origin_mm"][short_axis]
+        return 1 if toward * (-1 if long_axis == 0 else 1) > 0 else -1
+
+    @_drawing_edit
+    def configure_assembly(self, drawing_id: str, setup: dict[str, Any]) -> dict[str, Any]:
+        record = self._record(drawing_id)
+        context = self._context(record)
+        if context is record or not record.get("selected_recipe_id"):
+            raise ValueError("작업 기준 설정은 도면 그룹의 레시피를 선택한 후 저장하세요.")
+        if not isinstance(setup, dict):
+            raise ValueError("작업 기준 설정은 객체여야 합니다.")
+        previous = self._assembly_setup(record)
+        allowed = set(previous) - {"version", "automatic_enabled"}
+        if set(setup) - allowed:
+            raise ValueError("지원하지 않는 작업 기준 설정입니다. 서보 자동 적용은 아직 지원하지 않습니다.")
+        updated = {**previous, **deepcopy(setup)}
+        for key in ("product_origin_mm", "operator_position_mm", "ptm_position_mm", "servo_reference_raw", "servo_mm_per_unit"):
+            vector = updated[key]
+            limit = 1e12 if key == "servo_reference_raw" else 1e6
+            if not isinstance(vector, (list, tuple)) or len(vector) != 3:
+                raise ValueError(f"{key}에는 X/Y/Z 세 값이 필요합니다.")
+            for value in vector:
+                if key == "servo_mm_per_unit" and value is None:
+                    continue
+                if type(value) not in (int, float) or not math.isfinite(value) or abs(value) > limit:
+                    raise ValueError(f"{key}에는 범위 내 유한한 숫자를 입력하세요.")
+                if key == "servo_mm_per_unit" and value == 0:
+                    raise ValueError("서보 환산계수는 0일 수 없습니다.")
+            updated[key] = list(vector)
+        height = updated["operator_height_mm"]
+        if type(height) not in (int, float) or not math.isfinite(height) or not 500 <= height <= 2500:
+            raise ValueError("작업자 키는 500~2500mm 범위여야 합니다.")
+        if updated["ptm_mode"] not in {"calibrated", "manual"}:
+            raise ValueError("PTM 위치 모드는 calibrated 또는 manual이어야 합니다.")
+        if updated["ptm_mode"] == "manual" and sum((a-b)**2 for a, b in
+                zip(updated["ptm_position_mm"], updated["product_origin_mm"])) < 1:
+            raise ValueError("PTM 표시 위치는 제품 기준점과 다르게 지정하세요.")
+        _, _, long_axis, _ = self._product_pose_frame(record)
+        short_axis = 1 - long_axis
+        if abs(updated["operator_position_mm"][short_axis] - updated["product_origin_mm"][short_axis]) < 1:
+            raise ValueError("작업자 위치는 제품 긴축의 한쪽 전면에 두세요.")
+        reference_changed = any(updated[key] != previous[key] for key in ("product_origin_mm", "operator_position_mm"))
+        if reference_changed and (context.get("product_rotation_deg") or context.get("product_tilt_deg")):
+            raise ValueError("작업자/제품 기준은 제품 회전·틸팅을 0°/0°로 되돌린 후 저장하세요.")
+        context["assembly_setup"] = updated
+        self.recipe_store.get_recipe(record["selected_recipe_id"]).updated = now_iso()
+        self.save()
+        return self._public_record(record, include_points=True)
+
+    def preview_servo(self, drawing_id: str, raw: list[float], rotation: float, tilt: float) -> dict[str, Any]:
+        record = self._record(drawing_id)
+        setup = self._assembly_setup(record)
+        if (not isinstance(raw, list) or len(raw) != 3 or any(type(value) not in (int, float)
+                or not math.isfinite(value) or abs(value) > 1e12 for value in raw)):
+            raise ValueError("서보 원시값 X/Y/Z에는 범위 내 유한한 숫자를 입력하세요.")
+        if any(type(value) not in (int, float) or not math.isfinite(value) or abs(value) > 360 for value in (rotation, tilt)):
+            raise ValueError("미리보기 각도는 -360~360° 범위여야 합니다.")
+        scale = setup["servo_mm_per_unit"]
+        if any(value is None for value in scale):
+            return {"ready": False, "automatic_enabled": False, "reason": "축별 mm/원시값 환산계수를 먼저 설정하세요."}
+        origin = setup["product_origin_mm"]
+        delta = [(raw[index] - setup["servo_reference_raw"][index]) * scale[index] for index in range(3)]
+        position = tuple(origin[index] + delta[index] for index in range(3))
+        _, _, long_axis, _ = self._product_pose_frame(record)
+        transformed = self._rotate_product_position(position, origin, long_axis, tilt * self._operator_tilt_sign(record, long_axis))
+        transformed = self._rotate_product_position(transformed, origin, 2, -rotation)
+        compensated = [setup["servo_reference_raw"][index] + (transformed[index] - origin[index]) / scale[index]
+                       for index in range(3)]
+        if not all(math.isfinite(value) for value in (*transformed, *compensated)):
+            raise ValueError("서보 미리보기 결과가 계산 범위를 벗어났습니다.")
+        return {"ready": True, "automatic_enabled": False, "input_raw": list(raw),
+                "reference_raw": setup["servo_reference_raw"], "delta_mm": delta,
+                "transformed_xyz_mm": list(transformed), "compensated_raw": compensated}
 
     @staticmethod
     def _rotate_product_position(
@@ -995,9 +1102,10 @@ class DrawingStore:
         product_tilt_deg: float,
     ) -> tuple[tuple[float, float, float], dict[str, Any]]:
         frame = self._display_pose_frame(record)
-        rotations = ((frame["rotation_axis"], product_rotation_deg), (frame["tilt_axis"], product_tilt_deg))
+        rotations = ((frame["rotation_axis"], product_rotation_deg * frame["rotation_sign"]),
+                     (frame["tilt_axis"], product_tilt_deg * frame["tilt_sign"]))
         posed = position
-        for axis, angle in (reversed(rotations) if frame["convention"] == "floor_yaw_long_tilt_v1" else rotations):
+        for axis, angle in (rotations if frame["convention"] == "legacy_world_axes" else reversed(rotations)):
             posed = self._rotate_product_position(posed, frame["center"], axis, angle)
         return posed, frame
 
@@ -1103,6 +1211,8 @@ class DrawingStore:
         raw_points = self._points(record)
 
         center, rotation_axis, tilt_axis, spans = self._product_pose_frame(record)
+        center = self._assembly_setup(record)["product_origin_mm"]
+        tilt_sign = self._operator_tilt_sign(record, tilt_axis)
         calibrated_points: list[dict[str, Any]] = []
         for raw in raw_points:
             point = DrawingPoint.from_dict(raw)
@@ -1118,7 +1228,7 @@ class DrawingStore:
                 else:
                     pan, tilt, posed = predict_product_pose(
                         fit, point.position, center, rotation_axis, tilt_axis,
-                        product_rotation_deg, product_tilt_deg, translation, local_tilt=True,
+                        -product_rotation_deg, product_tilt_deg * tilt_sign, translation, local_tilt=True,
                     )
 
             payload = point.to_dict()
@@ -1148,7 +1258,9 @@ class DrawingStore:
             "rotation_axis": self._pose_axis_name(rotation_axis),
             "tilt_axis": self._pose_axis_name(tilt_axis),
             "reference_pose": {"rotation_deg": 0.0, "tilt_deg": 0.0},
-            "pose_convention": "floor_yaw_long_tilt_v1",
+            "pose_convention": "operator_clockwise_v1",
+            "rotation_sign": -1,
+            "tilt_sign": tilt_sign,
             "ptm_pose": estimate_calibration_ptm(fit),
         }
         context = self._context(record)
@@ -1315,8 +1427,9 @@ class DrawingStore:
         if product_rotation_deg or product_tilt_deg or any(translation):
             pan, tilt, posed = predict_product_pose(
                 fit, (float(x), float(y), target_z), frame["center"],
-                frame["rotation_axis"], frame["tilt_axis"], product_rotation_deg, product_tilt_deg, translation,
-                local_tilt=frame["convention"] == "floor_yaw_long_tilt_v1",
+                frame["rotation_axis"], frame["tilt_axis"], product_rotation_deg * frame["rotation_sign"],
+                product_tilt_deg * frame["tilt_sign"], translation,
+                local_tilt=frame["convention"] != "legacy_world_axes",
             )
         else:
             pan, tilt = fit.predict(DrawingPoint.create(posed))
@@ -1421,6 +1534,8 @@ class DrawingStore:
             state = self._new_recipe_state(record, record["selected_point_file"], self._points(record))
             for key in ("calibration", "product_rotation_deg", "product_tilt_deg", "product_translation_mm"):
                 state[key] = deepcopy(context.get(key, state[key]))
+            if "assembly_setup" in context:
+                state["assembly_setup"] = deepcopy(context["assembly_setup"])
             updated.drawing = state
             updated.product_rotation_deg = state["product_rotation_deg"]
             updated.product_tilt_deg = state["product_tilt_deg"]
@@ -1566,6 +1681,7 @@ class DrawingStore:
                 }
             )
             result["pose_frame"] = self._display_pose_frame(record)
+            result["assembly_setup"] = self._assembly_setup(record)
             calibration = context.get("calibration") or {}
             result["ptm_pose"] = calibration.get("ptm_pose") or calibration.get("camera_pose")
             if calibration and result["ptm_pose"] is None:
@@ -1581,6 +1697,11 @@ class DrawingStore:
                     result["ptm_pose"] = estimate_calibration_ptm(fit_affine_calibration(references))
                 except CalibrationError:
                     pass
+            result["ptm_calibrated_pose"] = deepcopy(result["ptm_pose"])
+            if result["assembly_setup"]["ptm_mode"] == "manual":
+                result["ptm_pose"] = {"position_mm": result["assembly_setup"]["ptm_position_mm"],
+                                      "right": [1, 0, 0], "up": [0, 1, 0], "forward": [0, 0, 1],
+                                      "estimated": False, "source": "manual_display"}
             result["camera_pose"] = result["ptm_pose"]  # Legacy API alias; this is a PTM laser origin.
         if include_points:
             result["points"] = [
@@ -1589,7 +1710,7 @@ class DrawingStore:
             ]
         if self.recipe_store is not None and record.get("source_kind") in CAD_PACKAGE_KINDS and context is record:
             result.update(calibration=None, product_rotation_deg=0.0, product_tilt_deg=0.0,
-                          product_translation_mm=[0.0, 0.0, 0.0], ptm_pose=None, camera_pose=None)
+                          product_translation_mm=[0.0, 0.0, 0.0], ptm_pose=None, camera_pose=None, ptm_calibrated_pose=None)
             for point in result.get("points", []):
                 point.update(pan=None, tilt=None, calibration=False, calibration_slot=None)
         return result

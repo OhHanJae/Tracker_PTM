@@ -138,7 +138,7 @@ def test_pose_uses_depth_and_preserves_zero_reference(tmp_path):
         assert target["pan"] == point["pan"]
         assert target["tilt"] == point["tilt"]
         # Independent pinhole geometry: motor at (0, 0, -1000), pivot at CAD origin.
-        a, b = math.radians(30), math.radians(10)
+        a, b = math.radians(-30), math.radians(10)
         x, y = point["x"], point["y"]
         # Tilt about local long X, then yaw about fixed vertical Z.
         rotated_x = x * math.cos(a) - y * math.cos(b) * math.sin(a)
