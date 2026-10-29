@@ -290,12 +290,12 @@ body:has(#drawings:not([hidden])) > main { flex: 1; min-height: 0; width: 100%; 
 .drawing-point-scroll { max-height: 520px; overflow-x: auto; }
 .drawing-point-table { width: 100%; min-width: 0; table-layout: fixed; }
 .drawing-calibration-panel .drawing-point-table { min-width: 650px; }
-.drawing-calibration-panel .drawing-point-table th,
 .drawing-calibration-panel .drawing-point-table td { text-align: right; }
 .drawing-calibration-panel .drawing-point-table th:nth-child(1),
 .drawing-calibration-panel .drawing-point-table td:nth-child(1) { width: 36px; text-align: center; }
 .drawing-calibration-panel .drawing-point-table th:nth-child(2),
-.drawing-calibration-panel .drawing-point-table td:nth-child(2) { width: 86px; text-align: left; }
+.drawing-calibration-panel .drawing-point-table td:nth-child(2) { width: 86px; }
+.drawing-calibration-panel .drawing-point-table td:nth-child(2) { text-align: left; }
 .drawing-calibration-panel .drawing-point-table th:nth-child(3),
 .drawing-calibration-panel .drawing-point-table td:nth-child(3),
 .drawing-calibration-panel .drawing-point-table th:nth-child(4),
@@ -315,6 +315,7 @@ body:has(#drawings:not([hidden])) > main { flex: 1; min-height: 0; width: 100%; 
 .drawing-point-table th:nth-child(5), .drawing-point-table td:nth-child(5) { width: 32px; text-align: center; }
 .drawing-point-table th:nth-child(6), .drawing-point-table td:nth-child(6) { width: 108px; }
 .drawing-point-table th:nth-child(7), .drawing-point-table td:nth-child(7) { width: 56px; }
+.drawing-calibration-panel .drawing-point-table thead th { text-align: center; }
 .drawing-point-scroll input { width: 100%; min-height: 28px; padding: 3px 4px; }
 .drawing-point-scroll input[type=checkbox] { width: 18px; }
 .drawing-point-scroll td, .drawing-point-scroll th { padding: 5px 4px; }
@@ -340,15 +341,35 @@ body:has(#drawings:not([hidden])) > main { flex: 1; min-height: 0; width: 100%; 
 .cad-groups { display: grid; gap: 6px; margin: 10px 0; }
 .cad-group { display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
 .cad-stage { position: relative; min-width: 0; min-height: 620px; overflow: hidden; background: #050b11; border: 1px solid #263541; border-radius: 10px; }
+.cad-views { position: absolute; top: 10px; left: 10px; z-index: 2; max-width: calc(100% - 20px); gap: 4px; padding: 5px; background: rgba(255,255,255,.94); border: 1px solid #dce3eacc; border-radius: 8px; box-shadow: 0 3px 12px #0003; }
+.cad-views button { min-height: 30px; padding: 5px 8px; border-color: transparent; background: transparent; }
+.cad-views button:hover { color: #155fb7; background: var(--accent-soft); border-color: #c9dfff; }
 .cad-scene-status { position: absolute; left: 10px; bottom: 10px; right: 10px; width: fit-content; max-width: calc(100% - 20px); padding: 7px 10px; border-radius: 6px; background: #101a25d9; color: #d5e6f5; white-space: pre-line; font-size: 11px; line-height: 1.5; pointer-events: none; }
 .cad-model-label { position: absolute; transform: translate(12px,-22px); padding: 3px 6px; border-radius: 4px; background: #142b43e8; color: #a7d6ff; font-size: 11px; white-space: nowrap; pointer-events: none; }
-.cad-setup { margin: 8px 0; border: 1px solid var(--line); border-radius: 7px; padding: 8px; }
-.cad-setup summary { cursor: pointer; font-weight: 600; }
-.cad-setup p { font-size: 12px; line-height: 1.5; }
-.cad-setup-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; margin: 8px 0; }
-.cad-setup-grid label { display: flex; flex-direction: column; min-width: 0; font-size: 12px; }
+.cad-setup { margin: 8px 0; border: 1px solid var(--line); border-radius: 8px; }
+.cad-setup summary { display: flex; align-items: center; gap: 8px; padding: 10px; background: var(--panel-soft); border-radius: 8px; list-style: none; cursor: pointer; font-weight: 600; }
+.cad-setup summary::-webkit-details-marker { display: none; }
+.cad-setup summary::after { content: ""; width: 7px; height: 7px; flex-shrink: 0; margin: 0 3px; border-right: 2px solid #8493a2; border-bottom: 2px solid #8493a2; transform: rotate(-45deg); }
+.cad-setup[open] > summary { border-bottom: 1px solid var(--line); border-radius: 8px 8px 0 0; }
+.cad-setup[open] > summary::after { transform: rotate(45deg); }
+.cad-setup-title { flex: 1; min-width: 0; font-size: 12px; }
+.cad-setup-title small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 400; }
+.cad-setup-badge { padding: 4px 6px; color: #8b661c; background: #fff2d7; border-radius: 5px; font-size: 10px; white-space: nowrap; }
+.cad-setup-body { display: grid; gap: 10px; padding: 10px; }
+.cad-setup p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.cad-setup-section { min-width: 0; margin: 0; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
+.cad-setup-section legend { padding: 0 4px; color: #445565; font-size: 11px; font-weight: 600; }
+.cad-setup-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; }
+.cad-setup-grid-two { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.cad-setup-grid + .cad-setup-grid { margin-top: 8px; }
+.cad-setup-grid label { display: flex; flex-direction: column; align-items: stretch; min-width: 0; font-size: 11px; }
 .cad-setup-grid input, .cad-setup-grid select { min-width: 0; width: 100%; box-sizing: border-box; }
-.cad-setup output { display: block; white-space: pre-line; font-size: 12px; }
+.cad-setup-inline { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,130px); margin-top: 8px; }
+.cad-setup-inline input { width: 100%; }
+.cad-setup-actions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px; }
+.cad-setup-actions button { min-height: 32px; padding: 6px 8px; font-size: 11px; }
+.cad-setup output { display: block; padding: 8px; background: var(--panel-soft); border-radius: 6px; white-space: pre-line; overflow-wrap: anywhere; font-size: 11px; }
+.cad-setup output:empty { display: none; }
 .cad-stage[aria-busy="true"]::after { content:"3D 도면을 불러오는 중…"; position:absolute; inset:0; display:grid; place-items:center; background:#101820d9; color:#fff; font-size:14px; z-index:3; }
 #cadCanvas, #cadPointLayer { position: absolute; inset: 0; width: 100%; height: 100%; }
 #cadCanvas { touch-action: none; }

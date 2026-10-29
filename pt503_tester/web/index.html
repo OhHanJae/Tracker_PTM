@@ -171,12 +171,7 @@
             </div>
             <div class="drawing-calibration-layout">
                 <section class="drawing-view-panel">
-                    <div class="toolbar cad-views">
-                        <button data-cad-view="top" type="button">위</button><button data-cad-view="bottom" type="button">아래</button>
-                        <button data-cad-view="front" type="button">앞</button><button data-cad-view="back" type="button">뒤</button>
-                        <button data-cad-view="left" type="button">좌</button><button data-cad-view="right" type="button">우</button>
-                        <button data-cad-view="reset" type="button">초기화</button>
-                        <button data-cad-view="operator" type="button">작업자 시점</button>
+                    <div class="toolbar cad-options">
                         <label><input id="cadLabels" type="checkbox">포인트 ID 보이기</label>
                         <label><input id="cadTargetLabels" type="checkbox">타겟 ID 표시</label>
                         <label><input id="cadFloor" type="checkbox" checked>바닥면</label>
@@ -184,17 +179,23 @@
                         <label><input id="cadPtm" type="checkbox" checked>PTM 레이저 모듈</label>
                         <label><input id="cadOperator" type="checkbox" checked>작업자·조립 기준</label>
                     </div>
-                    <div id="cadStage" class="cad-stage"><canvas id="cadCanvas"></canvas><div id="cadPointLayer"></div><span id="cadPtmLabel" class="cad-model-label" hidden>PTM · 레이저 모듈</span><span id="cadOperatorLabel" class="cad-model-label" hidden>작업자 · 조립 0° 기준</span><output id="cadSceneStatus" class="cad-scene-status" aria-live="polite"></output></div>
-                    <pre id="cadSelection">도면 포인트를 선택하세요.</pre>
+                    <div id="cadStage" class="cad-stage">
+                        <canvas id="cadCanvas"></canvas><div id="cadPointLayer"></div>
+                        <div class="toolbar cad-views" role="toolbar" aria-label="도면 시점">
+                            <button data-cad-view="top" type="button">위</button><button data-cad-view="bottom" type="button">아래</button>
+                            <button data-cad-view="front" type="button">앞</button><button data-cad-view="back" type="button">뒤</button>
+                            <button data-cad-view="left" type="button">좌</button><button data-cad-view="right" type="button">우</button>
+                            <button data-cad-view="reset" type="button">초기화</button>
+                            <button data-cad-view="operator" type="button">작업자 시점</button>
+                        </div>
+                        <span id="cadPtmLabel" class="cad-model-label" hidden>PTM · 레이저 모듈</span><span id="cadOperatorLabel" class="cad-model-label" hidden>작업자 · 조립 0° 기준</span><output id="cadSceneStatus" class="cad-scene-status" hidden></output>
+                    </div>
+                    <pre id="cadSelection" hidden>도면 포인트를 선택하세요.</pre>
                     <output id="drawingInfo">도면 없음</output>
                 </section>
                 <aside class="drawing-calibration-panel">
                     <div class="drawing-calibration-scroll">
                         <h2>도면 포인트 설정</h2>
-                        <div class="toolbar">
-                            <label><input id="drawingPointLabels" type="checkbox">포인트 ID 보이기</label>
-                            <label><input id="drawingTargetLabels" type="checkbox">타겟 ID 표시</label>
-                        </div>
                         <div id="drawingPointSets" class="cad-groups"></div>
                         <div class="toolbar"><label>그룹 레시피<select id="drawingActiveRecipe" aria-label="그룹 레시피"></select></label><button id="newDrawingRecipe" type="button">새 레시피</button></div>
                         <p id="drawingWorkflowStatus" role="status"></p>
@@ -206,29 +207,57 @@
                         </div>
                         <p>각도 입력 위에서 휠: 0.1° · Ctrl+휠: 1° · 위로 증가/아래로 감소. 입력 즉시 도면에 미리보기하며 저장·장치 이동은 하지 않습니다.</p>
                         <details id="drawingAssemblySettings" class="cad-setup">
-                            <summary>작업자·제품 0° 기준 / PTM 위치 설정</summary>
-                            <p>XYZ는 CAD 도면 mm입니다. 제품 기준점이 회전·틸팅 중심이며, 기준 변경은 0°/0°에서 저장합니다.</p>
-                            <div class="cad-setup-grid">
-                                <label>기본 0°의 회전 °<input id="assemblyZeroRotation" type="number" min="-360" max="360" step="0.1" value="0"></label><label>기본 0°의 틸트 °<input id="assemblyZeroTilt" type="number" min="-360" max="360" step="0.1" value="0"></label>
-                                <label>제품 기준 X<input id="assemblyProductX" type="number" step="0.1"></label><label>기준 Y<input id="assemblyProductY" type="number" step="0.1"></label><label>기준 Z<input id="assemblyProductZ" type="number" step="0.1"></label>
-                                <label>작업자 X<input id="assemblyWorkerX" type="number" step="0.1"></label><label>작업자 Y<input id="assemblyWorkerY" type="number" step="0.1"></label><label>발 위치 Z<input id="assemblyWorkerZ" type="number" step="0.1"></label>
-                                <label>작업자 키 mm<input id="assemblyWorkerHeight" type="number" min="500" max="2500" step="10"></label>
-                                <label>PTM 표시 위치<select id="assemblyPtmMode"><option value="calibrated">캘리브레이션 추정</option><option value="manual">직접 지정 (표시용)</option></select></label>
-                                <label>PTM 설치 방향<select id="assemblyPtmInstallation"><option value="above">상부 → 하향 조사</option><option value="below">하부 → 상향 조사</option><option value="free">추정 위치 그대로</option></select></label>
+                            <summary><span class="cad-setup-title">작업 기준·PTM 위치<small>제품 0° 자세와 작업자 위치</small></span></summary>
+                            <div class="cad-setup-body">
+                                <p>XYZ 단위는 mm입니다. 제품 기준점이 회전·틸팅 중심이며, 기준 변경은 0°/0°에서 저장합니다.</p>
+                                <fieldset class="cad-setup-section">
+                                    <legend>제품 기준 · 0° 자세</legend>
+                                    <div class="cad-setup-grid cad-setup-grid-two">
+                                        <label>회전 (°)<input id="assemblyZeroRotation" type="number" min="-360" max="360" step="0.1" value="0"></label><label>틸트 (°)<input id="assemblyZeroTilt" type="number" min="-360" max="360" step="0.1" value="0"></label>
+                                    </div>
+                                    <div class="cad-setup-grid">
+                                        <label>기준 X<input id="assemblyProductX" type="number" step="0.1"></label><label>기준 Y<input id="assemblyProductY" type="number" step="0.1"></label><label>기준 Z<input id="assemblyProductZ" type="number" step="0.1"></label>
+                                    </div>
+                                </fieldset>
+                                <fieldset class="cad-setup-section">
+                                    <legend>작업자</legend>
+                                    <div class="cad-setup-grid">
+                                        <label>위치 X<input id="assemblyWorkerX" type="number" step="0.1"></label><label>위치 Y<input id="assemblyWorkerY" type="number" step="0.1"></label><label>발 위치 Z<input id="assemblyWorkerZ" type="number" step="0.1"></label>
+                                    </div>
+                                    <label class="cad-setup-inline">키 (mm)<input id="assemblyWorkerHeight" type="number" min="500" max="2500" step="10"></label>
+                                </fieldset>
+                                <fieldset class="cad-setup-section">
+                                    <legend>PTM 위치</legend>
+                                    <div class="cad-setup-grid cad-setup-grid-two">
+                                        <label>표시 위치<select id="assemblyPtmMode"><option value="calibrated">캘리브레이션 추정</option><option value="manual">직접 지정 (표시용)</option></select></label>
+                                        <label>설치 방향<select id="assemblyPtmInstallation"><option value="above">상부 → 하향 조사</option><option value="below">하부 → 상향 조사</option><option value="free">추정 위치 그대로</option></select></label>
+                                    </div>
+                                    <div class="cad-setup-grid"><label>X<input id="assemblyPtmX" type="number" step="0.1"></label><label>Y<input id="assemblyPtmY" type="number" step="0.1"></label><label>Z<input id="assemblyPtmZ" type="number" step="0.1"></label></div>
+                                </fieldset>
+                                <div class="cad-setup-actions"><button id="placePtmInFront" type="button">작업자 전면에 PTM 배치</button><button id="previewAssemblySetup" type="button">표시 미리보기</button><button id="saveAssemblySetup" type="button">선택 레시피에 저장</button><button id="cancelAssemblySetup" type="button">저장값으로 복원</button></div>
+                                <p>기본 회전 180°를 저장하면 그 방향이 상대 0°가 됩니다. PTM 좌표를 입력하면 직접 지정 모드로 바뀌며 캘리브레이션 시 함께 저장합니다. 설치 방향은 자동 추정 표시의 상·하 조건이며, 실제 Pan/Tilt 보정은 티칭 기준점을 사용합니다.</p>
+                                <output id="assemblySetupStatus" role="status"></output>
                             </div>
-                            <div class="cad-setup-grid"><label>PTM X<input id="assemblyPtmX" type="number" step="0.1"></label><label>PTM Y<input id="assemblyPtmY" type="number" step="0.1"></label><label>PTM Z<input id="assemblyPtmZ" type="number" step="0.1"></label></div>
-                            <div class="toolbar"><button id="placePtmInFront" type="button">PTM을 작업자쪽 전면에 배치</button><button id="previewAssemblySetup" type="button">표시 미리보기</button><button id="saveAssemblySetup" type="button">선택 레시피에 저장</button><button id="cancelAssemblySetup" type="button">저장값으로 복원</button></div>
-                            <p>기본 회전 180°를 저장하면 그 방향이 상대 0°가 됩니다. PTM 좌표를 입력하면 직접 지정 모드로 바뀌며 캘리브레이션 시 함께 저장합니다. 설치 방향은 자동 추정 표시의 상·하 조건이며, 실제 Pan/Tilt 보정은 티칭 기준점을 사용합니다.</p>
-                            <output id="assemblySetupStatus" role="status"></output>
                         </details>
                         <details id="drawingServoSetup" class="cad-setup">
-                            <summary>서보 XYZ 보정 준비 — 자동 적용 꺼짐</summary>
-                            <p>원시 엔코더·펄스값과 축별 mm/원시값 계수를 준비합니다. 아래 계산은 점 좌표 변환 미리보기이며 장치에 보내지 않습니다.</p>
-                            <div class="cad-setup-grid"><label>기준 원시 X<input id="servoReferenceX" type="number" step="any" value="0"></label><label>기준 원시 Y<input id="servoReferenceY" type="number" step="any" value="0"></label><label>기준 원시 Z<input id="servoReferenceZ" type="number" step="any" value="0"></label>
-                                <label>X mm/원시값<input id="servoScaleX" type="number" step="any" placeholder="미설정"></label><label>Y mm/원시값<input id="servoScaleY" type="number" step="any" placeholder="미설정"></label><label>Z mm/원시값<input id="servoScaleZ" type="number" step="any" placeholder="미설정"></label>
-                                <label>입력 원시 X<input id="servoRawX" type="number" step="any" value="0"></label><label>입력 원시 Y<input id="servoRawY" type="number" step="any" value="0"></label><label>입력 원시 Z<input id="servoRawZ" type="number" step="any" value="0"></label></div>
-                            <div class="toolbar"><button id="saveServoSetup" type="button">환산 설정 저장 (준비)</button><button id="previewServoSetup" type="button">저장된 설정으로 계산 미리보기</button></div>
-                            <output id="servoSetupStatus" role="status">연동 준비 상태 · 실제 자동 보정/서보 출력 없음</output>
+                            <summary><span class="cad-setup-title">서보 XYZ 보정<small>원시값 환산 설정·계산 미리보기</small></span><span class="cad-setup-badge">자동 적용 꺼짐</span></summary>
+                            <div class="cad-setup-body">
+                                <p>원시 엔코더·펄스값을 mm로 환산합니다. 아래 계산은 점 좌표 변환 미리보기이며 장치에 보내지 않습니다.</p>
+                                <fieldset class="cad-setup-section">
+                                    <legend>기준 원시값</legend>
+                                    <div class="cad-setup-grid"><label>X<input id="servoReferenceX" type="number" step="any" value="0"></label><label>Y<input id="servoReferenceY" type="number" step="any" value="0"></label><label>Z<input id="servoReferenceZ" type="number" step="any" value="0"></label></div>
+                                </fieldset>
+                                <fieldset class="cad-setup-section">
+                                    <legend>환산 계수 · mm/원시값</legend>
+                                    <div class="cad-setup-grid"><label>X<input id="servoScaleX" type="number" step="any" placeholder="미설정"></label><label>Y<input id="servoScaleY" type="number" step="any" placeholder="미설정"></label><label>Z<input id="servoScaleZ" type="number" step="any" placeholder="미설정"></label></div>
+                                </fieldset>
+                                <fieldset class="cad-setup-section">
+                                    <legend>미리보기 입력 원시값</legend>
+                                    <div class="cad-setup-grid"><label>X<input id="servoRawX" type="number" step="any" value="0"></label><label>Y<input id="servoRawY" type="number" step="any" value="0"></label><label>Z<input id="servoRawZ" type="number" step="any" value="0"></label></div>
+                                </fieldset>
+                                <div class="cad-setup-actions"><button id="saveServoSetup" type="button">환산 설정 저장 (준비)</button><button id="previewServoSetup" type="button">계산 미리보기</button></div>
+                                <output id="servoSetupStatus" role="status">연동 준비 상태 · 실제 자동 보정/서보 출력 없음</output>
+                            </div>
                         </details>
                         <p class="cad-warning">그룹 → 레시피를 선택한 후 제품 0°/0°에서 기준점을 티칭하세요. 회전/틸팅 각도를 바꾸고 캘리브레이션하면 3D 자세로 변환합니다. 계산한 이동값은 ‘레시피로 저장’으로 반영합니다.</p>
                         <div class="table-scroll drawing-point-scroll">
