@@ -21,6 +21,7 @@ from .drawing_calibration import (
     MeshModel,
     fit_affine_calibration,
     fit_inverse_xy_calibration,
+    estimate_calibration_ptm,
     load_model_file,
     predict_product_pose,
 )
@@ -939,8 +940,25 @@ class DrawingStore:
         maximums = tuple(max(position[axis] for position in coordinates) for axis in range(3))
         center = tuple((minimums[axis] + maximums[axis]) / 2.0 for axis in range(3))
         spans = tuple(maximums[axis] - minimums[axis] for axis in range(3))
-        axes = sorted(range(3), key=lambda axis: (-spans[axis], axis))
-        return center, axes[0], axes[1], spans
+        # CAD Z is the floor normal; tilt is around the product's long floor axis.
+        tilt_axis = max((0, 1), key=lambda axis: spans[axis])
+        return center, 2, tilt_axis, spans
+
+    def _display_pose_frame(self, record: dict[str, Any]) -> dict[str, Any]:
+        center, rotation_axis, tilt_axis, spans = self._product_pose_frame(record)
+        calibration = self._context(record).get("calibration") or {}
+        convention = "floor_yaw_long_tilt_v1"
+        if (not calibration.get("pose_convention") and
+                (calibration.get("product_rotation_deg") or calibration.get("product_tilt_deg"))):
+            # Existing saved motor angles still describe the previous convention.
+            axes = sorted(range(3), key=lambda axis: (-spans[axis], axis))
+            rotation_axis = "XYZ".find(calibration.get("rotation_axis") or "?")
+            tilt_axis = "XYZ".find(calibration.get("tilt_axis") or "?")
+            rotation_axis = rotation_axis if rotation_axis >= 0 else axes[0]
+            tilt_axis = tilt_axis if tilt_axis >= 0 else axes[1]
+            convention = "legacy_world_axes"
+        return {"center": list(center), "rotation_axis": rotation_axis, "tilt_axis": tilt_axis,
+                "convention": convention, "spans": list(spans)}
 
     @staticmethod
     def _rotate_product_position(
@@ -976,19 +994,12 @@ class DrawingStore:
         product_rotation_deg: float,
         product_tilt_deg: float,
     ) -> tuple[tuple[float, float, float], dict[str, Any]]:
-        center, rotation_axis, tilt_axis, spans = self._product_pose_frame(record)
-        rotated = self._rotate_product_position(
-            position, center, rotation_axis, product_rotation_deg
-        )
-        posed = self._rotate_product_position(
-            rotated, center, tilt_axis, product_tilt_deg
-        )
-        return posed, {
-            "center": center,
-            "rotation_axis": rotation_axis,
-            "tilt_axis": tilt_axis,
-            "spans": spans,
-        }
+        frame = self._display_pose_frame(record)
+        rotations = ((frame["rotation_axis"], product_rotation_deg), (frame["tilt_axis"], product_tilt_deg))
+        posed = position
+        for axis, angle in (reversed(rotations) if frame["convention"] == "floor_yaw_long_tilt_v1" else rotations):
+            posed = self._rotate_product_position(posed, frame["center"], axis, angle)
+        return posed, frame
 
     def _reference_calibration_points(
         self,
@@ -1107,7 +1118,7 @@ class DrawingStore:
                 else:
                     pan, tilt, posed = predict_product_pose(
                         fit, point.position, center, rotation_axis, tilt_axis,
-                        product_rotation_deg, product_tilt_deg, translation,
+                        product_rotation_deg, product_tilt_deg, translation, local_tilt=True,
                     )
 
             payload = point.to_dict()
@@ -1137,6 +1148,8 @@ class DrawingStore:
             "rotation_axis": self._pose_axis_name(rotation_axis),
             "tilt_axis": self._pose_axis_name(tilt_axis),
             "reference_pose": {"rotation_deg": 0.0, "tilt_deg": 0.0},
+            "pose_convention": "floor_yaw_long_tilt_v1",
+            "ptm_pose": estimate_calibration_ptm(fit),
         }
         context = self._context(record)
         context["product_rotation_deg"] = product_rotation_deg
@@ -1303,6 +1316,7 @@ class DrawingStore:
             pan, tilt, posed = predict_product_pose(
                 fit, (float(x), float(y), target_z), frame["center"],
                 frame["rotation_axis"], frame["tilt_axis"], product_rotation_deg, product_tilt_deg, translation,
+                local_tilt=frame["convention"] == "floor_yaw_long_tilt_v1",
             )
         else:
             pan, tilt = fit.predict(DrawingPoint.create(posed))
@@ -1551,8 +1565,23 @@ class DrawingStore:
                     "model_url": f"/api/drawings/{record.get('id')}/model",
                 }
             )
-            center, rotation_axis, tilt_axis, _ = self._product_pose_frame(record)
-            result["pose_frame"] = {"center": list(center), "rotation_axis": rotation_axis, "tilt_axis": tilt_axis}
+            result["pose_frame"] = self._display_pose_frame(record)
+            calibration = context.get("calibration") or {}
+            result["ptm_pose"] = calibration.get("ptm_pose") or calibration.get("camera_pose")
+            if calibration and result["ptm_pose"] is None:
+                try:
+                    references = []
+                    for raw in self._points(record):
+                        point = DrawingPoint.from_dict(raw)
+                        if raw.get("calibration_pan") is not None and raw.get("calibration_tilt") is not None:
+                            point.pan, point.tilt = raw["calibration_pan"], raw["calibration_tilt"]
+                        elif calibration.get("product_rotation_deg") or calibration.get("product_tilt_deg"):
+                            continue
+                        references.append(point)
+                    result["ptm_pose"] = estimate_calibration_ptm(fit_affine_calibration(references))
+                except CalibrationError:
+                    pass
+            result["camera_pose"] = result["ptm_pose"]  # Legacy API alias; this is a PTM laser origin.
         if include_points:
             result["points"] = [
                 self._public_point(point, index)
@@ -1560,7 +1589,7 @@ class DrawingStore:
             ]
         if self.recipe_store is not None and record.get("source_kind") in CAD_PACKAGE_KINDS and context is record:
             result.update(calibration=None, product_rotation_deg=0.0, product_tilt_deg=0.0,
-                          product_translation_mm=[0.0, 0.0, 0.0])
+                          product_translation_mm=[0.0, 0.0, 0.0], ptm_pose=None, camera_pose=None)
             for point in result.get("points", []):
                 point.update(pan=None, tilt=None, calibration=False, calibration_slot=None)
         return result

@@ -8,13 +8,31 @@ export const MODEL_UNITS_PER_MM = 0.1;
 const BACKGROUND_COLOR = 0x20252a;
 const DEFAULT_DIRECTION = new THREE.Vector3(1, -1, 0.75).normalize();
 const PRESETS = {
-    top: [0, 0, -1],
-    bottom: [0, 0, 1],
+    top: [0, 0, 1],
+    bottom: [0, 0, -1],
     front: [0, -1, 0],
     back: [0, 1, 0],
     left: [1, 0, 0],
     right: [-1, 0, 0]
 };
+
+export function makeProductPoseMatrix(frame, rotation = 0, tilt = 0, translation = [0, 0, 0])
+{
+    const matrix = new THREE.Matrix4();
+    if (frame)
+    {
+        const pivot = new THREE.Vector3(...frame.center).multiplyScalar(MODEL_UNITS_PER_MM);
+        const axis = index => new THREE.Vector3(...[0, 1, 2].map(value => value === index ? 1 : 0));
+        const yaw = new THREE.Matrix4().makeRotationAxis(axis(frame.rotation_axis), THREE.MathUtils.degToRad(rotation));
+        const pitch = new THREE.Matrix4().makeRotationAxis(axis(frame.tilt_axis), THREE.MathUtils.degToRad(tilt));
+        matrix.makeTranslation(pivot.x, pivot.y, pivot.z);
+        if (frame.convention === 'floor_yaw_long_tilt_v1') matrix.multiply(yaw).multiply(pitch);
+        else matrix.multiply(pitch).multiply(yaw);
+        matrix.multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
+    }
+    const offset = new THREE.Vector3(...translation).multiplyScalar(MODEL_UNITS_PER_MM);
+    return matrix.premultiply(new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z));
+}
 
 function modelStats(root)
 {
@@ -96,6 +114,7 @@ function disposeObject(root)
 export async function createStandaloneViewer({
     canvas,
     pointLayer,
+    ptmLabel = null,
     modelUrl,
     points = [],
     onSelect = null
@@ -166,6 +185,130 @@ export async function createStandaloneViewer({
     const radius = Math.max(size.length() * 0.5, 0.001);
     const stats = modelStats(model);
 
+    const floor = new THREE.Group();
+    floor.position.set(center.x, center.y, bounds.min.z - radius * 0.35);
+    floor.add(new THREE.Mesh(new THREE.PlaneGeometry(radius * 5, radius * 5),
+        new THREE.MeshBasicMaterial({color: 0x506274, transparent: true, opacity: 0.2,
+            side: THREE.DoubleSide, depthWrite: false})));
+    const grid = new THREE.GridHelper(radius * 5, 20, 0x7692a9, 0x415566);
+    grid.rotation.x = Math.PI / 2;
+    grid.position.z = radius * 0.001;
+    floor.add(grid);
+    scene.add(floor);
+
+    const directions = new THREE.Group();
+    poseRoot.add(directions);
+    const verticalAxis = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), center,
+        radius * 0.5, 0xf5ca64, radius * 0.07, radius * 0.035);
+    scene.add(verticalAxis);
+    const mockPtm = new THREE.Group();
+    scene.add(mockPtm);
+    let ptmPose = null;
+    let ptmPoseKey = '';
+    let ptmHead = null;
+    let laserLine = null;
+    let laserTarget = null;
+    let ptmUnit = 0;
+    let poseKey = '';
+    let axesKey = '';
+    const sceneOptions = {floor: true, ptm: true, axes: true};
+
+    function updateDirections(frame, translation)
+    {
+        const longAxis = frame?.tilt_axis ?? (size.x >= size.y ? 0 : 1);
+        const pivot = frame ? new THREE.Vector3(...frame.center).multiplyScalar(MODEL_UNITS_PER_MM) : center;
+        verticalAxis.position.copy(pivot).add(new THREE.Vector3(...translation).multiplyScalar(MODEL_UNITS_PER_MM));
+        const key = JSON.stringify([pivot.toArray(), longAxis]);
+        if (key === axesKey) return;
+        axesKey = key;
+        disposeObject(directions);
+        directions.clear();
+        const axis = new THREE.Vector3(...[0, 1, 2].map(index => index === longAxis ? 1 : 0));
+        directions.add(new THREE.ArrowHelper(axis, pivot, radius * 0.65, 0x42d9cd,
+            radius * 0.07, radius * 0.035));
+        const other = new THREE.Vector3(longAxis === 0 ? 0 : 1, longAxis === 0 ? 1 : 0, 0);
+        directions.add(new THREE.ArrowHelper(other, pivot, radius * 0.4, 0xf29265,
+            radius * 0.06, radius * 0.03));
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+            pivot.clone().addScaledVector(axis, -radius * 0.55), pivot.clone().addScaledVector(axis, radius * 0.55)]),
+            new THREE.LineDashedMaterial({color: 0x42d9cd, dashSize: radius * 0.03, gapSize: radius * 0.02}));
+        line.computeLineDistances();
+        directions.add(line);
+        const marker = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.014, 12, 8),
+            new THREE.MeshBasicMaterial({color: 0xffffff}));
+        marker.position.copy(pivot);
+        directions.add(marker);
+    }
+
+    function setPtmPose(value)
+    {
+        const valid = value && ['position_mm', 'right', 'up', 'forward'].every(key =>
+            Array.isArray(value[key]) && value[key].length === 3 && value[key].every(Number.isFinite));
+        const key = JSON.stringify(valid ? value : null);
+        if (key === ptmPoseKey) return;
+        ptmPoseKey = key;
+        ptmPose = valid ? value : null;
+        disposeObject(mockPtm);
+        mockPtm.clear();
+        ptmHead = laserLine = laserTarget = null;
+        mockPtm.visible = Boolean(ptmPose) && sceneOptions.ptm;
+        if (ptmPose)
+        {
+            const unit = radius * 0.065;
+            ptmUnit = unit;
+            const housing = new THREE.MeshStandardMaterial({color: 0x7da1b7, metalness: 0.3, roughness: 0.5});
+            const dark = new THREE.MeshStandardMaterial({color: 0x334959, roughness: 0.65});
+            const base = new THREE.Mesh(new THREE.CylinderGeometry(unit, unit * 1.1, unit * 0.4, 24), dark);
+            base.rotation.x = Math.PI / 2;
+            base.position.z = -unit * 1.8;
+            const pan = new THREE.Mesh(new THREE.CylinderGeometry(unit * 0.45, unit * 0.6, unit * 0.8, 20), housing);
+            pan.rotation.x = Math.PI / 2;
+            pan.position.z = -unit * 1.25;
+            mockPtm.add(base, pan);
+            for (const side of [-1, 1])
+            {
+                const arm = new THREE.Mesh(new THREE.BoxGeometry(unit * 0.25, unit * 0.5, unit * 1.5), housing);
+                arm.position.set(side * unit * 0.72, 0, -unit * 0.45);
+                mockPtm.add(arm);
+            }
+            ptmHead = new THREE.Group();
+            const head = new THREE.Mesh(new THREE.CylinderGeometry(unit * 0.52, unit * 0.52, unit * 1.4, 20), housing);
+            head.rotation.x = Math.PI / 2;
+            const aperture = new THREE.Mesh(new THREE.CylinderGeometry(unit * 0.35, unit * 0.35, unit * 0.15, 20), dark);
+            aperture.rotation.x = Math.PI / 2;
+            aperture.position.z = unit * 0.76;
+            const emitter = new THREE.Mesh(new THREE.CircleGeometry(unit * 0.18, 20),
+                new THREE.MeshBasicMaterial({color: 0xff453c, side: THREE.DoubleSide}));
+            emitter.position.z = unit * 0.85;
+            ptmHead.add(head, aperture, emitter);
+            laserLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+                new THREE.LineBasicMaterial({color: 0xff5145, transparent: true, opacity: 0.85}));
+            laserTarget = new THREE.Mesh(new THREE.SphereGeometry(unit * 0.08, 10, 8),
+                new THREE.MeshBasicMaterial({color: 0xff5145}));
+            mockPtm.add(ptmHead, laserLine, laserTarget);
+            mockPtm.position.fromArray(ptmPose.position_mm).multiplyScalar(MODEL_UNITS_PER_MM);
+        }
+        fitModel(camera.position.clone().sub(controls.target));
+        render();
+    }
+
+    function updatePtmDirection()
+    {
+        if (!ptmHead) return;
+        const point = currentPoints.find(item => pointKey(item) === selectedKey);
+        const target = point ? new THREE.Vector3(...point.xyz_mm).multiplyScalar(MODEL_UNITS_PER_MM) : center.clone();
+        target.applyMatrix4(poseMatrix).sub(mockPtm.position);
+        const direction = target.clone().normalize();
+        if (direction.lengthSq() < 1e-12) return;
+        ptmHead.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), direction);
+        const positions = laserLine.geometry.getAttribute('position');
+        positions.setXYZ(0, direction.x * ptmUnit * 0.9, direction.y * ptmUnit * 0.9, direction.z * ptmUnit * 0.9);
+        positions.setXYZ(1, target.x, target.y, target.z);
+        positions.needsUpdate = true;
+        laserLine.geometry.computeBoundingSphere();
+        laserTarget.position.copy(target);
+    }
+
     let currentPoints = Array.isArray(points) ? points : [];
     let selectedKey = null;
     let markers = [];
@@ -178,22 +321,27 @@ export async function createStandaloneViewer({
 
     function fitModel(direction = DEFAULT_DIRECTION)
     {
+        if (direction.lengthSq() < 1e-12) direction = DEFAULT_DIRECTION;
+        const viewBounds = bounds.clone().applyMatrix4(poseMatrix);
+        if (ptmPose && sceneOptions.ptm) viewBounds.expandByPoint(mockPtm.position);
+        const viewCenter = viewBounds.getCenter(new THREE.Vector3());
+        const viewRadius = Math.max(viewBounds.getSize(new THREE.Vector3()).length() * 0.5, radius);
         const rect = canvas.getBoundingClientRect();
         const aspect = Math.max(rect.width, 1) / Math.max(rect.height, 1);
         const verticalFov = THREE.MathUtils.degToRad(camera.fov);
-        let distance = radius / Math.sin(verticalFov * 0.5);
+        let distance = viewRadius / Math.sin(verticalFov * 0.5);
         if (aspect < 1)
         {
             distance /= aspect;
         }
         distance *= 1.12;
-        camera.position.copy(center).addScaledVector(direction.clone().normalize(), distance);
-        camera.near = Math.max(radius / 1000, 0.001);
-        camera.far = Math.max(distance + radius * 40, camera.near * 100);
+        camera.position.copy(viewCenter).addScaledVector(direction.clone().normalize(), distance);
+        camera.near = Math.max(viewRadius / 1000, 0.001);
+        camera.far = Math.max(distance + viewRadius * 40, camera.near * 100);
         camera.updateProjectionMatrix();
-        controls.target.copy(center);
+        controls.target.copy(viewCenter);
         controls.minDistance = Math.max(radius * 0.015, 0.001);
-        controls.maxDistance = radius * 60;
+        controls.maxDistance = viewRadius * 60;
         controls.update();
     }
 
@@ -244,6 +392,14 @@ export async function createStandaloneViewer({
     function updatePointMarkers()
     {
         const rect = canvas.getBoundingClientRect();
+        if (ptmLabel)
+        {
+            const projected = mockPtm.position.clone().project(camera);
+            ptmLabel.hidden = !mockPtm.visible || projected.z < -1 || projected.z > 1 ||
+                Math.abs(projected.x) > 1 || Math.abs(projected.y) > 1;
+            ptmLabel.style.left = `${(projected.x * 0.5 + 0.5) * rect.width}px`;
+            ptmLabel.style.top = `${(0.5 - projected.y * 0.5) * rect.height}px`;
+        }
         for (const item of markers)
         {
             const xyz = item.point.xyz_mm || [];
@@ -275,6 +431,7 @@ export async function createStandaloneViewer({
         }
         resize();
         const moving = controls.update();
+        updatePtmDirection();
         renderer.render(scene, camera);
         updatePointMarkers();
         if (moving)
@@ -368,6 +525,7 @@ export async function createStandaloneViewer({
     resizeObserver.observe(canvas);
     canvas.addEventListener('contextmenu', event => event.preventDefault());
 
+    updateDirections(null, [0, 0, 0]);
     rebuildPointMarkers();
     fitModel();
     draw();
@@ -375,20 +533,22 @@ export async function createStandaloneViewer({
     return {
         setPose(frame, rotation = 0, tilt = 0, translation = [0, 0, 0])
         {
-            poseMatrix.identity();
-            if (frame)
-            {
-                const pivot = new THREE.Vector3(...frame.center).multiplyScalar(MODEL_UNITS_PER_MM);
-                const axis = index => new THREE.Vector3(...[0, 1, 2].map(value => value === index ? 1 : 0));
-                poseMatrix.makeTranslation(pivot.x, pivot.y, pivot.z)
-                    .multiply(new THREE.Matrix4().makeRotationAxis(axis(frame.tilt_axis), THREE.MathUtils.degToRad(tilt)))
-                    .multiply(new THREE.Matrix4().makeRotationAxis(axis(frame.rotation_axis), THREE.MathUtils.degToRad(rotation)))
-                    .multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
-            }
-            const offset = new THREE.Vector3(...translation).multiplyScalar(MODEL_UNITS_PER_MM);
-            poseMatrix.premultiply(new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z));
+            poseMatrix.copy(makeProductPoseMatrix(frame, rotation, tilt, translation));
             poseRoot.matrix.copy(poseMatrix);
             poseRoot.matrixWorldNeedsUpdate = true;
+            updateDirections(frame, translation);
+            const key = JSON.stringify([frame, rotation, tilt, translation]);
+            if (key !== poseKey) fitModel(camera.position.clone().sub(controls.target));
+            poseKey = key;
+            render();
+        },
+        setPtmPose,
+        setSceneOptions(value)
+        {
+            Object.assign(sceneOptions, value);
+            floor.visible = sceneOptions.floor;
+            directions.visible = verticalAxis.visible = sceneOptions.axes;
+            mockPtm.visible = Boolean(ptmPose) && sceneOptions.ptm;
             render();
         },
         setPoints(value)
@@ -433,8 +593,13 @@ export async function createStandaloneViewer({
             controls.removeEventListener('change', requestRender);
             controls.dispose();
             pointLayer.replaceChildren();
+            if (ptmLabel) ptmLabel.hidden = true;
             scene.remove(poseRoot);
-            disposeObject(model);
+            for (const object of [poseRoot, floor, verticalAxis, mockPtm])
+            {
+                scene.remove(object);
+                disposeObject(object);
+            }
             environmentTarget.dispose();
             pmrem.dispose();
             renderer.dispose();

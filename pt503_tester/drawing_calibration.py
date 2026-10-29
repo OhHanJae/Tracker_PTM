@@ -369,20 +369,7 @@ def fit_affine_calibration(points: list[DrawingPoint]) -> CalibrationFit:
     )
 
 
-def predict_product_pose(
-    fit: CalibrationFit,
-    position: Vector3,
-    pivot: Vector3,
-    rotation_axis: int,
-    tilt_axis: int,
-    rotation_deg: float,
-    tilt_deg: float,
-    translation: Vector3 = (0.0, 0.0, 0.0),
-) -> tuple[float, float, Vector3]:
-    """Project a CAD point after rotation, tilt, then drawing-axis translation."""
-    if (not isinstance(translation, (tuple, list)) or len(translation) != 3
-            or any(type(value) not in (int, float) or not math.isfinite(value) for value in translation)):
-        raise CalibrationError("제품 좌표 이동량은 유한한 X/Y/Z 값이어야 합니다.")
+def _projective_pose_frame(fit: CalibrationFit) -> tuple[list[Vector3], Vector3]:
     if fit.coordinate_axes is None or fit.projective_coefficients is None:
         raise CalibrationError("제품 자세 보정에는 평면 기준점 캘리브레이션이 필요합니다.")
 
@@ -419,6 +406,45 @@ def predict_product_pose(
     basis[normal_axis] = tuple(sign * value for value in cross)
 
     at_origin = (distance_scale * h[2], distance_scale * h[5], distance_scale)
+    return basis, at_origin
+
+
+def estimate_calibration_ptm(fit: CalibrationFit) -> dict[str, Any] | None:
+    """Estimate the PTM laser's virtual ray origin from taught Pan/Tilt angles."""
+    if fit.coordinate_axes is None or fit.projective_coefficients is None:
+        return None
+    basis, at_origin = _projective_pose_frame(fit)
+    return {
+        "position_mm": [fit.origin[axis] - sum(a * b for a, b in zip(basis[axis], at_origin))
+                        for axis in range(3)],
+        "right": [basis[axis][0] for axis in range(3)],
+        "up": [basis[axis][1] for axis in range(3)],
+        "forward": [basis[axis][2] for axis in range(3)],
+        "estimated": True,
+        "source": "ptm_angular_calibration",
+    }
+
+
+# Compatibility for the original diagnostic helper name.
+estimate_calibration_camera = estimate_calibration_ptm
+
+
+def predict_product_pose(
+    fit: CalibrationFit,
+    position: Vector3,
+    pivot: Vector3,
+    rotation_axis: int,
+    tilt_axis: int,
+    rotation_deg: float,
+    tilt_deg: float,
+    translation: Vector3 = (0.0, 0.0, 0.0),
+    *, local_tilt: bool = False,
+) -> tuple[float, float, Vector3]:
+    """Project a pose; local tilt follows the product's yawed longitudinal axis."""
+    if (not isinstance(translation, (tuple, list)) or len(translation) != 3
+            or any(type(value) not in (int, float) or not math.isfinite(value) for value in translation)):
+        raise CalibrationError("제품 좌표 이동량은 유한한 X/Y/Z 값이어야 합니다.")
+    basis, at_origin = _projective_pose_frame(fit)
     at_pivot = tuple(
         at_origin[component]
         + sum(basis[axis][component] * (pivot[axis] - fit.origin[axis]) for axis in range(3))
@@ -429,7 +455,8 @@ def predict_product_pose(
         at_pivot[component] + sum(basis[axis][component] * offset[axis] for axis in range(3))
         for component in range(3)
     )
-    for axis, degrees in ((rotation_axis, rotation_deg), (tilt_axis, tilt_deg)):
+    rotations = ((rotation_axis, rotation_deg), (tilt_axis, tilt_deg))
+    for axis, degrees in (reversed(rotations) if local_tilt else rotations):
         radians = math.radians(degrees)
         cosine, sine = math.cos(radians), math.sin(radians)
         other = (axis + 1) % 3

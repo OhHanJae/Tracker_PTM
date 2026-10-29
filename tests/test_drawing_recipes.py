@@ -140,9 +140,10 @@ def test_pose_uses_depth_and_preserves_zero_reference(tmp_path):
         # Independent pinhole geometry: motor at (0, 0, -1000), pivot at CAD origin.
         a, b = math.radians(30), math.radians(10)
         x, y = point["x"], point["y"]
-        rotated_y, rotated_z = y * math.cos(a), y * math.sin(a)
-        rotated_x = x * math.cos(b) + rotated_z * math.sin(b)
-        depth = 1000 - x * math.sin(b) + rotated_z * math.cos(b)
+        # Tilt about local long X, then yaw about fixed vertical Z.
+        rotated_x = x * math.cos(a) - y * math.cos(b) * math.sin(a)
+        rotated_y = x * math.sin(a) + y * math.cos(b) * math.cos(a)
+        depth = 1000 + y * math.sin(b)
         expected_pan = math.degrees(math.atan2(rotated_x, depth)) % 360
         expected_tilt = math.degrees(math.atan2(rotated_y, math.hypot(rotated_x, depth)))
         pan_error = (point["pan"] - expected_pan + 180) % 360 - 180

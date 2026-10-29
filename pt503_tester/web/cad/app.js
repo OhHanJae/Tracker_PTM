@@ -61,6 +61,26 @@ function validateDrawing(drawing)
     }
 }
 
+function updateScene(drawing)
+{
+    const ptm = drawing.ptm_pose ?? drawing.camera_pose;
+    state.viewer.setPose(drawing.pose_frame, drawing.product_rotation_deg, drawing.product_tilt_deg, drawing.product_translation_mm);
+    state.viewer.setPtmPose(ptm);
+    state.viewer.setSceneOptions({floor: byId('cadFloor').checked, ptm: byId('cadPtm').checked,
+        axes: byId('cadAxes').checked});
+    const frame = drawing.pose_frame || {};
+    const longAxis = 'XYZ'[frame.tilt_axis] || 'X';
+    const legacy = frame.convention === 'legacy_world_axes';
+    byId('cadSceneStatus').textContent = [
+        `${legacy ? '기존 회전' : '좌우 회전'} ${Number(drawing.product_rotation_deg || 0).toFixed(1)}° · ${legacy ? '기존 틸팅' : '긴축 틸팅'} ${Number(drawing.product_tilt_deg || 0).toFixed(1)}°`,
+        `청록: ${legacy ? '기존 틸트축' : '제품 긴축'}(+${longAxis}) / 중심 틸트축 · 노랑: 바닥 수직(+Z) · 바닥면: 표시 기준`,
+        ptm ? `PTM 레이저 기준점 XYZ(mm): ${ptm.position_mm.map(value => Number(value).toFixed(1)).join(', ')} · 기준점 각도 보정 추정`
+            : 'PTM 레이저 모듈: 레시피 기준점 캘리브레이션 후 자동 표시',
+        ptm ? '빨강: 선택 포인트 방향의 모의 조사선 · 실제 레이저 ON 표시 아님' : '',
+        legacy ? '이전 축으로 저장된 자세: 기존 이동값 유지 중 · 새 축 적용 시 자세 보정을 다시 적용하세요.' : '',
+    ].filter(Boolean).join('\n');
+}
+
 async function loadDrawing(drawing)
 {
     validateDrawing(drawing);
@@ -74,6 +94,7 @@ async function loadDrawing(drawing)
         state.viewer = await createStandaloneViewer({
             canvas: byId('cadCanvas'),
             pointLayer: byId('cadPointLayer'),
+            ptmLabel: byId('cadPtmLabel'),
             modelUrl,
             points: state.points,
             onSelect: point => showPoint(point)
@@ -93,7 +114,7 @@ async function loadDrawing(drawing)
             state.viewer.selectPoint(selected.group_id, selected.target_id);
         }
     }
-    state.viewer.setPose(drawing.pose_frame, drawing.product_rotation_deg, drawing.product_tilt_deg, drawing.product_translation_mm);
+    updateScene(drawing);
     state.viewer.render();
 }
 
@@ -119,8 +140,15 @@ window.addEventListener('drawing-cad-points', event => {
     state.drawing = drawing;
     state.points = viewerPoints(drawing.points);
     state.viewer.setPoints(state.points);
-    state.viewer.setPose(drawing.pose_frame, drawing.product_rotation_deg, drawing.product_tilt_deg, drawing.product_translation_mm);
+    updateScene(drawing);
 });
+
+for (const id of ['cadFloor', 'cadPtm', 'cadAxes'])
+{
+    byId(id).addEventListener('change', () => {
+        if (state.viewer && state.drawing) updateScene(state.drawing);
+    });
+}
 
 window.addEventListener('drawing-cad-select', event => {
     const point = state.points.find(item => item.id === event.detail?.point_id);
