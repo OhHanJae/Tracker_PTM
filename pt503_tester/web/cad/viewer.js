@@ -23,8 +23,8 @@ export function makeProductPoseMatrix(frame, rotation = 0, tilt = 0, translation
     {
         const pivot = new THREE.Vector3(...frame.center).multiplyScalar(MODEL_UNITS_PER_MM);
         const axis = index => new THREE.Vector3(...[0, 1, 2].map(value => value === index ? 1 : 0));
-        const yaw = new THREE.Matrix4().makeRotationAxis(axis(frame.rotation_axis), THREE.MathUtils.degToRad(rotation * (frame.rotation_sign ?? 1)));
-        const pitch = new THREE.Matrix4().makeRotationAxis(axis(frame.tilt_axis), THREE.MathUtils.degToRad(tilt * (frame.tilt_sign ?? 1)));
+        const yaw = new THREE.Matrix4().makeRotationAxis(axis(frame.rotation_axis), THREE.MathUtils.degToRad((rotation + (frame.zero_rotation_deg || 0)) * (frame.rotation_sign ?? 1)));
+        const pitch = new THREE.Matrix4().makeRotationAxis(axis(frame.tilt_axis), THREE.MathUtils.degToRad((tilt + (frame.zero_tilt_deg || 0)) * (frame.tilt_sign ?? 1)));
         matrix.makeTranslation(pivot.x, pivot.y, pivot.z);
         if (['floor_yaw_long_tilt_v1', 'operator_clockwise_v1'].includes(frame.convention)) matrix.multiply(yaw).multiply(pitch);
         else matrix.multiply(pitch).multiply(yaw);
@@ -220,7 +220,7 @@ export async function createStandaloneViewer({
     let axesKey = '';
     const sceneOptions = {floor: true, ptm: true, axes: true, worker: true};
 
-    function setAssembly(value)
+    function setAssembly(value, {fit = true} = {})
     {
         const key = JSON.stringify(value || null);
         if (key === assemblyKey) return;
@@ -271,7 +271,7 @@ export async function createStandaloneViewer({
                 0x68df99, radius * 0.05, radius * 0.025);
             worker.add(guide);
         }
-        fitModel(camera.position.clone().sub(controls.target));
+        if (fit) fitModel(camera.position.clone().sub(controls.target));
         render();
     }
 
@@ -302,7 +302,7 @@ export async function createStandaloneViewer({
         directions.add(marker);
     }
 
-    function setPtmPose(value)
+    function setPtmPose(value, {fit = true} = {})
     {
         const valid = value && ['position_mm', 'right', 'up', 'forward'].every(key =>
             Array.isArray(value[key]) && value[key].length === 3 && value[key].every(Number.isFinite));
@@ -350,7 +350,7 @@ export async function createStandaloneViewer({
             mockPtm.add(ptmHead, laserLine, laserTarget);
             mockPtm.position.fromArray(ptmPose.position_mm).multiplyScalar(MODEL_UNITS_PER_MM);
         }
-        fitModel(camera.position.clone().sub(controls.target));
+        if (fit) fitModel(camera.position.clone().sub(controls.target));
         render();
     }
 
@@ -603,14 +603,14 @@ export async function createStandaloneViewer({
     draw();
 
     return {
-        setPose(frame, rotation = 0, tilt = 0, translation = [0, 0, 0])
+        setPose(frame, rotation = 0, tilt = 0, translation = [0, 0, 0], {fit = true} = {})
         {
             poseMatrix.copy(makeProductPoseMatrix(frame, rotation, tilt, translation));
             poseRoot.matrix.copy(poseMatrix);
             poseRoot.matrixWorldNeedsUpdate = true;
             updateDirections(frame, translation);
             const key = JSON.stringify([frame, rotation, tilt, translation]);
-            if (key !== poseKey) fitModel(camera.position.clone().sub(controls.target));
+            if (fit && key !== poseKey) fitModel(camera.position.clone().sub(controls.target));
             poseKey = key;
             render();
         },

@@ -84,6 +84,12 @@ const {chromium} = require('playwright');
                 assemblyDrawing = {...assemblyDrawing, assembly_setup: params.setup};
                 return json({drawing: assemblyDrawing});
             }
+            if (command === 'drawing.calibrate' && assemblyDrawing) {
+                assert.equal(params.recipe_id, 'assembly-recipe');
+                assemblyDrawing = {...assemblyDrawing, assembly_setup: params.assembly_setup || assemblyDrawing.assembly_setup,
+                    product_rotation_deg: params.product_rotation_deg, product_tilt_deg: params.product_tilt_deg};
+                return json({drawing: assemblyDrawing});
+            }
             if (command === 'drawing.servo_preview') {
                 assert.deepEqual(params.servo_xyz, [100, 20, 30]);
                 return json({ready: true, automatic_enabled: false, transformed_xyz_mm: [10, 2, 3], compensated_raw: [100, 20, 30]});
@@ -377,6 +383,8 @@ const {chromium} = require('playwright');
             selected_point_file: 'group.json', selected_recipe_id: 'assembly-recipe',
             coordinate_frame: 'PRODUCT_CAD_STEP_NATIVE', units: 'mm', model_rendering: {model_units_per_mm: 0.1},
             points: [], point_sets: [{file: 'group.json', name: 'Group'}], calibration: null,
+            pose_frame: {center: [0, 0, 0], rotation_axis: 2, tilt_axis: 0, convention: 'operator_clockwise_v1', rotation_sign: -1, tilt_sign: 1},
+            ptm_reference_pose: {position_mm: [0, 0, -1000]},
             assembly_setup: {product_origin_mm: [0, 0, 0], operator_position_mm: [0, -1000, -300],
                 operator_height_mm: 1700, ptm_mode: 'calibrated', ptm_position_mm: [0, -650, 250],
                 servo_reference_raw: [0, 0, 0], servo_mm_per_unit: [null, null, null], automatic_enabled: false}};
@@ -390,12 +398,38 @@ const {chromium} = require('playwright');
         await page.locator('#tabs button').filter({hasText: '도면 캘리브레이션'}).click();
         await page.locator('#drawingAssemblySettings summary').click();
         await clear();
+        await page.evaluate(() => {
+            window.posePreviews = [];
+            window.addEventListener('drawing-cad-pose-preview', event => window.posePreviews.push(event.detail.drawing));
+        });
+        const rotationInput = page.locator('#drawingProductRotation');
+        await rotationInput.fill('0');
+        await rotationInput.hover();
+        await page.mouse.wheel(0, -100);
+        await page.waitForFunction(() => $('drawingProductRotation').value === '0.1');
+        await page.keyboard.down('Control');
+        await page.mouse.wheel(0, -100);
+        await page.keyboard.up('Control');
+        await page.waitForFunction(() => $('drawingProductRotation').value === '1.1');
+        await page.mouse.wheel(0, 100);
+        await page.waitForFunction(() => $('drawingProductRotation').value === '1');
+        assert.equal(await page.evaluate(() => window.posePreviews.at(-1).product_rotation_deg), 1);
+        assert.equal((await sent('drawing.calibrate')).length, 0, 'wheel is local preview only');
+        await rotationInput.fill('0');
         await page.locator('#placePtmInFront').click();
         assert.equal(await page.locator('#assemblyPtmMode').inputValue(), 'manual');
         assert.equal(await page.locator('#assemblyPtmY').inputValue(), '-650');
         assert.equal((await sent('drawing.assembly_setup')).length, 0, 'manual PTM preview remains local');
         await page.locator('#saveAssemblySetup').click();
         await page.waitForFunction(() => !drawingActionBusy && $('assemblySetupStatus').textContent.includes('저장'));
+        await page.locator('#assemblyZeroRotation').fill('180');
+        await page.locator('#assemblyPtmZ').fill('750');
+        assert.equal(await page.locator('#assemblyPtmMode').inputValue(), 'manual');
+        assert.equal(await page.evaluate(() => window.posePreviews.at(-1).ptm_pose.position_mm[2]), 750);
+        await page.evaluate(() => calibrateDrawing());
+        assert.equal((await sent('drawing.calibrate')).at(-1).params.assembly_setup.zero_rotation_deg, 180);
+        assert.equal((await sent('drawing.calibrate')).at(-1).params.assembly_setup.ptm_position_mm[2], 750);
+        assert.equal(await page.locator('#assemblyPtmZ').inputValue(), '750', 'calibration retains draft PTM coordinates');
         await page.locator('#drawingServoSetup summary').click();
         for (const axis of 'XYZ') await page.locator('#servoScale' + axis).fill('0.1');
         await page.locator('#saveServoSetup').click();

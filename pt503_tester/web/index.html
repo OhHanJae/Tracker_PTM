@@ -116,7 +116,7 @@
                     <button id="undoRecipePose" type="button" disabled>보정 되돌리기</button>
                 </div>
                 <output id="recipePoseStatus" role="status" aria-live="polite">도면 좌표와 캘리브레이션이 있는 레시피를 선택하세요.</output>
-                <p class="recipe-move-help">기준 자세에서의 절대 보정값입니다. 제품 중심 기준 턴 → 틸트 → 도면 X/Y/Z 이동 순서로 적용하며, 되돌리기는 마지막 적용 직전 상태를 복원합니다. 저장한 보정값은 다음 포인트 이동부터 사용합니다.</p>
+                <p class="recipe-move-help">설정한 기본 자세에서의 상대 보정값입니다. 각도 입력 위에서 휠 0.1° / Ctrl+휠 1°로 조정하며, 연결 도면에 즉시 미리보기합니다. 기본 긴축 틸트 → 바닥 수직 회전 → 도면 X/Y/Z 이동으로 적용합니다. ‘전체 포인트 보정 적용’으로 저장하며 다음 포인트 이동부터 사용합니다. 되돌리기는 마지막 적용 직전 상태를 복원합니다.</p>
             </form>
             <p id="recipeDescription"></p>
             <output id="selectedPointStatus">선택 포인트: -</output>
@@ -204,18 +204,21 @@
                             <label>틸팅 ° (+ 전면이 작업자쪽)<input id="drawingProductTilt" type="number" min="-360" max="360" step="0.1" value="0"></label>
                             <output id="drawingPoseStatus">0° / 0° 기준 캘리브레이션</output>
                         </div>
+                        <p>각도 입력 위에서 휠: 0.1° · Ctrl+휠: 1° · 위로 증가/아래로 감소. 입력 즉시 도면에 미리보기하며 저장·장치 이동은 하지 않습니다.</p>
                         <details id="drawingAssemblySettings" class="cad-setup">
                             <summary>작업자·제품 0° 기준 / PTM 위치 설정</summary>
                             <p>XYZ는 CAD 도면 mm입니다. 제품 기준점이 회전·틸팅 중심이며, 기준 변경은 0°/0°에서 저장합니다.</p>
                             <div class="cad-setup-grid">
+                                <label>기본 0°의 회전 °<input id="assemblyZeroRotation" type="number" min="-360" max="360" step="0.1" value="0"></label><label>기본 0°의 틸트 °<input id="assemblyZeroTilt" type="number" min="-360" max="360" step="0.1" value="0"></label>
                                 <label>제품 기준 X<input id="assemblyProductX" type="number" step="0.1"></label><label>기준 Y<input id="assemblyProductY" type="number" step="0.1"></label><label>기준 Z<input id="assemblyProductZ" type="number" step="0.1"></label>
                                 <label>작업자 X<input id="assemblyWorkerX" type="number" step="0.1"></label><label>작업자 Y<input id="assemblyWorkerY" type="number" step="0.1"></label><label>발 위치 Z<input id="assemblyWorkerZ" type="number" step="0.1"></label>
                                 <label>작업자 키 mm<input id="assemblyWorkerHeight" type="number" min="500" max="2500" step="10"></label>
                                 <label>PTM 표시 위치<select id="assemblyPtmMode"><option value="calibrated">캘리브레이션 추정</option><option value="manual">직접 지정 (표시용)</option></select></label>
+                                <label>PTM 설치 방향<select id="assemblyPtmInstallation"><option value="above">상부 → 하향 조사</option><option value="below">하부 → 상향 조사</option><option value="free">추정 위치 그대로</option></select></label>
                             </div>
                             <div class="cad-setup-grid"><label>PTM X<input id="assemblyPtmX" type="number" step="0.1"></label><label>PTM Y<input id="assemblyPtmY" type="number" step="0.1"></label><label>PTM Z<input id="assemblyPtmZ" type="number" step="0.1"></label></div>
                             <div class="toolbar"><button id="placePtmInFront" type="button">PTM을 작업자쪽 전면에 배치</button><button id="previewAssemblySetup" type="button">표시 미리보기</button><button id="saveAssemblySetup" type="button">선택 레시피에 저장</button><button id="cancelAssemblySetup" type="button">저장값으로 복원</button></div>
-                            <p>PTM 수동 위치는 뷰어 표시용입니다. 실제 Pan/Tilt 보정은 기준점 캘리브레이션을 사용합니다.</p>
+                            <p>기본 회전 180°를 저장하면 그 방향이 상대 0°가 됩니다. PTM 좌표를 입력하면 직접 지정 모드로 바뀌며 캘리브레이션 시 함께 저장합니다. 설치 방향은 자동 추정 표시의 상·하 조건이며, 실제 Pan/Tilt 보정은 티칭 기준점을 사용합니다.</p>
                             <output id="assemblySetupStatus" role="status"></output>
                         </details>
                         <details id="drawingServoSetup" class="cad-setup">

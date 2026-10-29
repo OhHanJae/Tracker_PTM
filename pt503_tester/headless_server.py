@@ -2362,13 +2362,14 @@ class HeadlessController:
             return {"drawings": self.drawing_store.list_drawings()}
         if command == "drawing.get":
             return {"drawing": self.drawing_store.get_drawing(str(params["drawing_id"]))}
-        if command == "drawing.assembly_setup":
+        if command == "drawing.assembly_setup" or (command == "drawing.calibrate" and params.get("assembly_setup") is not None):
             if not params.get("recipe_id"):
                 raise ValueError("작업 기준 저장에는 recipe_id가 필요합니다.")
             if (self._pending_motion or self._active_jog is not None or self.scanning or self._auto_scan_active
                     or self._test_session):
                 raise HeadlessApiError("BUSY", "작업 기준 저장 전에 이동/조그/스캔/시험을 정지하세요.")
-            return {"drawing": self.drawing_store.configure_assembly(str(params["drawing_id"]), params.get("setup"))}
+            if command == "drawing.assembly_setup":
+                return {"drawing": self.drawing_store.configure_assembly(str(params["drawing_id"]), params.get("setup"))}
         if command == "drawing.servo_preview":
             if not params.get("recipe_id"):
                 raise ValueError("서보 미리보기에는 recipe_id가 필요합니다.")
@@ -2425,6 +2426,7 @@ class HeadlessController:
                         maximum=360.0,
                         required=False,
                     ) or 0.0,
+                    assembly_setup=params.get("assembly_setup"),
                 )
             }
         if command == "drawing.reset_calibration":

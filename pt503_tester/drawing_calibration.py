@@ -438,7 +438,7 @@ def predict_product_pose(
     rotation_deg: float,
     tilt_deg: float,
     translation: Vector3 = (0.0, 0.0, 0.0),
-    *, local_tilt: bool = False,
+    *, local_tilt: bool = False, zero_rotation_deg: float = 0.0, zero_tilt_deg: float = 0.0,
 ) -> tuple[float, float, Vector3]:
     """Project a pose; local tilt follows the product's yawed longitudinal axis."""
     if (not isinstance(translation, (tuple, list)) or len(translation) != 3
@@ -455,18 +455,28 @@ def predict_product_pose(
         at_pivot[component] + sum(basis[axis][component] * offset[axis] for axis in range(3))
         for component in range(3)
     )
-    rotations = ((rotation_axis, rotation_deg), (tilt_axis, tilt_deg))
-    for axis, degrees in (reversed(rotations) if local_tilt else rotations):
+    def rotate(values: list[float], axis: int, degrees: float) -> list[float]:
+        values = list(values)
         radians = math.radians(degrees)
         cosine, sine = math.cos(radians), math.sin(radians)
         other = (axis + 1) % 3
         last = (axis + 2) % 3
-        offset[other], offset[last] = (
-            offset[other] * cosine - offset[last] * sine,
-            offset[other] * sine + offset[last] * cosine,
+        values[other], values[last] = (
+            values[other] * cosine - values[last] * sine,
+            values[other] * sine + values[last] * cosine,
         )
+        return values
+    rotations = ((rotation_axis, rotation_deg), (tilt_axis, tilt_deg))
+    if local_tilt:
+        rotations = ((tilt_axis, zero_tilt_deg + tilt_deg), (rotation_axis, zero_rotation_deg + rotation_deg))
+    for axis, degrees in rotations:
+        offset = rotate(offset, axis, degrees)
     offset = [offset[axis] + translation[axis] for axis in range(3)]
     transformed = tuple(pivot[axis] + offset[axis] for axis in range(3))
+    if local_tilt:
+        # Teaching is expressed in the unposed CAD frame at the configured zero pose.
+        offset = rotate(offset, rotation_axis, -zero_rotation_deg)
+        offset = rotate(offset, tilt_axis, -zero_tilt_deg)
     local = tuple(
         at_pivot[component] + sum(basis[axis][component] * offset[axis] for axis in range(3))
         for component in range(3)

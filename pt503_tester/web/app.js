@@ -5584,6 +5584,9 @@ function renderAssemblySetup()
             ['X', 'Y', 'Z'].forEach((axis, index) => { $(prefix + axis).value = setup[name]?.[index] ?? ''; });
         $('assemblyWorkerHeight').value = setup.operator_height_mm;
         $('assemblyPtmMode').value = setup.ptm_mode;
+        $('assemblyPtmInstallation').value = setup.ptm_installation || 'above';
+        $('assemblyZeroRotation').value = setup.zero_rotation_deg || 0;
+        $('assemblyZeroTilt').value = setup.zero_tilt_deg || 0;
     }
     const ready = Boolean(activeDrawing?.selected_recipe_id && setup);
     for (const id of ['saveAssemblySetup', 'saveServoSetup', 'previewAssemblySetup', 'placePtmInFront', 'previewServoSetup'])
@@ -5610,11 +5613,104 @@ function assemblyValues()
     if (!Number.isFinite(setup.operator_height_mm) || setup.operator_height_mm < 500 || setup.operator_height_mm > 2500)
         throw Error('작업자 키는 500~2500mm로 입력하세요.');
     setup.ptm_mode = $('assemblyPtmMode').value;
+    setup.ptm_installation = $('assemblyPtmInstallation').value;
+    for (const [key, id] of [['zero_rotation_deg', 'assemblyZeroRotation'], ['zero_tilt_deg', 'assemblyZeroTilt']])
+    {
+        const value = $(id).value.trim();
+        if (value === '' || !Number.isFinite(Number(value)) || Math.abs(Number(value)) > 360)
+            throw Error('기본 0° 자세는 -360~360°로 입력하세요.');
+        setup[key] = Number(value);
+    }
     return setup;
 }
 
 for (const id of ['drawingAssemblySettings', 'drawingServoSetup'])
-    $(id).addEventListener('input', event => { if (!event.target.id.startsWith('servoRaw')) assemblyDirty = true; });
+    $(id).addEventListener('input', event => {
+        if (event.target.id.startsWith('servoRaw')) return;
+        assemblyDirty = true;
+        if (/^assemblyPtm[XYZ]$/.test(event.target.id)) $('assemblyPtmMode').value = 'manual';
+        try { previewDrawingPose(); } catch (_) { /* Incomplete numeric input stays editable. */ }
+    });
+
+function assemblyPreviewFrame(setup)
+{
+    const frame = {...activeDrawing.pose_frame, center: setup.product_origin_mm,
+        zero_rotation_deg: setup.zero_rotation_deg, zero_tilt_deg: setup.zero_tilt_deg,
+        convention: 'operator_clockwise_v1', rotation_sign: -1};
+    const heading = -setup.zero_rotation_deg * Math.PI / 180;
+    const [dx, dy] = frame.tilt_axis === 0 ? [0, -1] : [1, 0];
+    const toward = (setup.operator_position_mm[0] - setup.product_origin_mm[0]) * (dx * Math.cos(heading) - dy * Math.sin(heading))
+        + (setup.operator_position_mm[1] - setup.product_origin_mm[1]) * (dx * Math.sin(heading) + dy * Math.cos(heading));
+    const slope = Math.cos(setup.zero_tilt_deg * Math.PI / 180);
+    frame.tilt_sign = toward * (Math.abs(slope) > 1e-6 ? slope : 1) > 0 ? 1 : -1;
+    return frame;
+}
+
+function assemblyPreviewPtm(setup, frame)
+{
+    if (setup.ptm_mode === 'manual') return {position_mm: setup.ptm_position_mm, right: [1, 0, 0],
+        up: [0, 1, 0], forward: [0, 0, 1], estimated: false, source: 'manual_display'};
+    const reference = activeDrawing.ptm_reference_pose;
+    if (!reference) return activeDrawing.ptm_calibrated_pose;
+    const position = reference.position_mm.map((value, axis) => value - frame.center[axis]);
+    for (const [axis, degrees] of [[frame.tilt_axis, frame.zero_tilt_deg * frame.tilt_sign],
+        [frame.rotation_axis, frame.zero_rotation_deg * frame.rotation_sign]])
+    {
+        const a = (axis + 1) % 3, b = (axis + 2) % 3, radians = degrees * Math.PI / 180;
+        [position[a], position[b]] = [position[a] * Math.cos(radians) - position[b] * Math.sin(radians),
+            position[a] * Math.sin(radians) + position[b] * Math.cos(radians)];
+    }
+    const pose = {...reference, position_mm: position.map((value, axis) => value + frame.center[axis])};
+    if (setup.ptm_installation !== 'free')
+    {
+        const height = Math.max(Math.abs(pose.position_mm[2] - frame.center[2]), 250);
+        pose.position_mm[2] = frame.center[2] + (setup.ptm_installation === 'above' ? height : -height);
+        pose.installation = setup.ptm_installation;
+        pose.display_only = true;
+    }
+    return pose;
+}
+
+function previewDrawingPose(pose = drawingPoseValues())
+{
+    if (!activeDrawing?.pose_frame) return;
+    const setup = assemblyDirty ? assemblyValues() : activeDrawing.assembly_setup;
+    const frame = assemblyDirty ? assemblyPreviewFrame(setup) : activeDrawing.pose_frame;
+    const ptm = assemblyDirty ? assemblyPreviewPtm(setup, frame) : activeDrawing.ptm_pose;
+    window.dispatchEvent(new CustomEvent('drawing-cad-pose-preview', {detail: {drawing: {...activeDrawing,
+        ...pose, pose_frame: frame, assembly_setup: setup, ptm_pose: ptm, camera_pose: ptm, scene_preview: true}}}));
+}
+
+for (const id of ['drawingProductRotation', 'drawingProductTilt', 'recipePoseTurn', 'recipePoseTilt',
+    'assemblyZeroRotation', 'assemblyZeroTilt'])
+{
+    const input = $(id);
+    input.addEventListener('wheel', event => {
+        if (input.disabled || drawingActionBusy || !event.deltaY) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const value = Number(input.value);
+        if (!Number.isFinite(value)) return;
+        input.value = Math.max(-360, Math.min(360, Math.round((value + (event.deltaY < 0 ? 1 : -1) * (event.ctrlKey ? 1 : 0.1)) * 10) / 10));
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+    }, {passive: false});
+    if (id.startsWith('assembly')) continue; // The settings container handles these inputs.
+    input.addEventListener('input', () => {
+        try
+        {
+            if (id.startsWith('recipe'))
+            {
+                if (selected()?.id !== activeDrawing?.selected_recipe_id) return;
+                const rotation = Number($('recipePoseTurn').value), tilt = Number($('recipePoseTilt').value);
+                const translation = ['recipePoseX', 'recipePoseY', 'recipePoseZ'].map(key => Number($(key).value));
+                if (![rotation, tilt, ...translation].every(Number.isFinite) || Math.abs(rotation) > 360 || Math.abs(tilt) > 360) return;
+                previewDrawingPose({product_rotation_deg: rotation, product_tilt_deg: tilt, product_translation_mm: translation});
+            }
+            else previewDrawingPose();
+        }
+        catch (_) { /* Preview resumes when the input is valid. */ }
+    });
+}
 
 async function saveAssemblyValues()
 {
@@ -5632,11 +5728,9 @@ $('saveAssemblySetup').onclick = drawingAction(saveAssemblyValues, {pending: '�
 $('saveServoSetup').onclick = drawingAction(saveAssemblyValues, {pending: '서보 준비 설정 저장 중…', done: '서보 준비 설정 저장 완료'});
 $('previewAssemblySetup').onclick = guarded(() => {
     if (!activeDrawing) return;
-    const setup = assemblyValues();
-    const ptm = setup.ptm_mode === 'manual' ? {position_mm: setup.ptm_position_mm, right: [1, 0, 0],
-        up: [0, 1, 0], forward: [0, 0, 1], estimated: false, source: 'manual_display'} : activeDrawing.ptm_calibrated_pose;
-    window.dispatchEvent(new CustomEvent('drawing-cad-points', {detail: {drawing: {...activeDrawing,
-        assembly_setup: setup, ptm_pose: ptm, camera_pose: ptm, scene_preview: true}}}));
+    assemblyValues();
+    assemblyDirty = true;
+    previewDrawingPose();
     $('assemblySetupStatus').textContent = '미저장 표시 미리보기입니다. 포인트 이동값과 제품 기준은 아직 변경하지 않았습니다.';
 });
 $('cancelAssemblySetup').onclick = () => { assemblyDirty = false; renderDrawingPanel(); $('assemblySetupStatus').textContent = '저장된 기준으로 복원했습니다.'; };
@@ -6318,6 +6412,8 @@ async function calibrateDrawing()
             {
                 drawing_id:
                     activeDrawing.id,
+                recipe_id: activeDrawing.selected_recipe_id,
+                ...(assemblyDirty ? {assembly_setup: assemblyValues()} : {}),
                 ...pose
             }
         );
@@ -6325,6 +6421,7 @@ async function calibrateDrawing()
     activeDrawing =
         result.drawing;
 
+    assemblyDirty = false;
     loadDrawingPoseInputs();
     renderDrawingPanel();
 
