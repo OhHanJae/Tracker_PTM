@@ -15,7 +15,7 @@
     --red-soft: #fff0f0;
     --orange: #e38b2c;
     --shadow: 0 8px 28px rgba(33, 48, 63, .07);
-    --radius: 14px;
+    --radius: 8px;
     font-family: Inter, Pretendard, "Noto Sans KR", "Segoe UI", sans-serif;
     background: var(--bg);
     color: var(--text);
@@ -33,11 +33,11 @@ header {
     position: sticky;
     top: 0;
     z-index: 30;
-    min-height: 64px;
+    min-height: 56px;
     display: flex;
     align-items: center;
     gap: 14px;
-    padding: 0 28px;
+    padding: 0 12px;
     background: rgba(255, 255, 255, .94);
     backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--line);
@@ -57,7 +57,7 @@ h1::before {
     font-weight: 800;
     letter-spacing: -.4px;
 }
-h2 { margin: 22px 0 14px; color: #263545; font-size: 14px; }
+h2 { margin: 16px 0 10px; color: #263545; font-size: 14px; }
 h2:first-child { margin-top: 0; }
 #connection {
     display: inline-flex;
@@ -125,16 +125,16 @@ label { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; color: va
 input[type=number] { width: 115px; }
 input[type=checkbox] { min-height: 18px; width: 18px; accent-color: var(--accent); }
 .connection, .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
-.connection { padding: 14px 28px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.connection { padding: 8px 0; background: var(--panel); border-bottom: 1px solid var(--line); }
 #port { max-width: 310px; }
 nav {
     position: sticky;
-    top: 64px;
+    top: 56px;
     z-index: 20;
     display: flex;
     flex-wrap: wrap;
     gap: 5px;
-    padding: 8px 28px;
+    padding: 5px 12px;
     background: rgba(243, 246, 249, .95);
     backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--line);
@@ -165,7 +165,7 @@ nav button[aria-selected=true] { color: #215fae; background: #fff; border-color:
 nav button[aria-selected=true]::before { color: var(--accent); }
 #notice {
     position: fixed;
-    top: 72px;
+    top: 64px;
     right: 18px;
     z-index: 1000;
     max-width: min(520px,calc(100vw - 36px));
@@ -192,15 +192,15 @@ button[aria-busy="true"]:disabled { opacity:1; cursor:progress; }
 button[aria-busy="true"]::before, .action-feedback[data-kind="busy"]::before { content:""; display:inline-block; width:12px; height:12px; margin-right:6px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; vertical-align:-2px; animation:action-spin .8s linear infinite; }
 @keyframes action-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { button[aria-busy="true"]::before, .action-feedback::before { animation:none; } }
-main { max-width: 1564px; margin: 0 auto; padding: 14px 32px 42px; }
-.page { width: 100%; padding: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
-.columns { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
-.columns > section + section { padding-left: 32px; border-left: 1px solid var(--line); }
-.fields { display: flex; flex-wrap: wrap; gap: 14px; margin: 12px 0; }
+main { width: 100%; margin: 0; padding: 8px 8px 16px; }
+.page { width: 100%; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+.columns { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 16px; }
+.columns > section + section { padding-left: 16px; border-left: 1px solid var(--line); }
+.fields { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; }
 .fields label { flex-direction: column; align-items: flex-start; }
 form > label { margin: 12px 0; }
 form > button { margin: 10px 10px 10px 0; }
-.toolbar { padding: 10px 0; }
+.toolbar { padding: 6px 0; }
 .recipe-toolbar .recipe-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
 .recipe-toolbar .recipe-test-actions { margin-left: auto; }
 .readouts { display: flex; gap: 12px; margin-bottom: 12px; }
@@ -240,7 +240,7 @@ pre { max-height: 450px; padding: 14px; color: #d7e4ee; background: #121a22; bor
 textarea { width: 100%; margin: 10px 0; font-family: "Cascadia Code", Consolas, monospace; }
 details { margin: 18px 0; }
 summary { color: #344150; cursor: pointer; font-weight: 600; }
-.protocol-layout { display: grid; grid-template-columns: minmax(150px, .55fr) minmax(230px, .9fr) minmax(360px, 1.7fr); gap: 14px; align-items: start; }
+.protocol-layout { display: grid; grid-template-columns: minmax(150px, .55fr) minmax(230px, .9fr) minmax(360px, 1.7fr); gap: 10px; align-items: start; }
 .protocol-sidebar, .protocol-command-list { display: grid; gap: 6px; max-height: 680px; overflow: auto; padding: 8px; background: var(--panel-soft); border: 1px solid var(--line); border-radius: 10px; }
 .protocol-sidebar button, .protocol-command-list button { display: grid; width: 100%; gap: 3px; min-height: 0; padding: 9px 10px; text-align: left; background: #fff; }
 .protocol-sidebar button span, .protocol-command-list button span { color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.35; }
@@ -255,14 +255,14 @@ output { padding: 8px 0; }
 .drawing-pose-controls label { flex-direction: column; align-items: flex-start; }
 #drawingPoseStatus { color: #2165c5; font-weight: 700; }
 #recipeProductRotation[readonly], #recipeProductTilt[readonly] { background: #f1f4f7; color: #687583; cursor: default; }
-.drawing-layout { display: grid; grid-template-columns: minmax(420px,2fr) minmax(380px,1fr); gap: 24px; }
+.drawing-layout { display: grid; grid-template-columns: minmax(420px,2fr) minmax(380px,1fr); gap: 12px; }
 body:has(#drawings:not([hidden])) { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
 body:has(#drawings:not([hidden])) > header,
 body:has(#drawings:not([hidden])) > nav { flex-shrink: 0; }
-body:has(#drawings:not([hidden])) > main { flex: 1; min-height: 0; width: 100%; padding-bottom: 14px; }
+body:has(#drawings:not([hidden])) > main { flex: 1; min-height: 0; width: 100%; padding-bottom: 8px; }
 #drawings { display: flex; flex-direction: column; height: 100%; }
-#drawings > .toolbar { flex-shrink: 0; margin-bottom: 12px; }
-.drawing-calibration-layout { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0,1.6fr) minmax(0,1fr); grid-template-rows: minmax(0,1fr); gap: 18px; }
+#drawings > .toolbar { flex-shrink: 0; margin-bottom: 6px; }
+.drawing-calibration-layout { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0,1.6fr) minmax(0,1fr); grid-template-rows: minmax(0,1fr); gap: 10px; }
 .drawing-calibration-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .drawing-calibration-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 6px; }
 .drawing-calibration-actions { display: grid; flex-shrink: 0; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); background: var(--panel); }
@@ -334,7 +334,7 @@ body:has(#drawings:not([hidden])) > main { flex: 1; min-height: 0; width: 100%; 
 .estimated-move-time { font-variant-numeric: tabular-nums; }
 .recipe-note { min-width: 220px; white-space: pre-line; overflow-wrap: anywhere; }
 .recipe-move-help { color: #687583; font-size: 12px; }
-.cad-layout { display: grid; grid-template-columns: minmax(280px,360px) minmax(0,1fr); gap: 18px; min-height: 650px; }
+.cad-layout { display: grid; grid-template-columns: minmax(280px,360px) minmax(0,1fr); gap: 10px; min-height: 650px; }
 .cad-panel { min-width: 0; overflow: auto; }
 #cadInfo { display: block; white-space: pre-wrap; color: #445565; line-height: 1.5; }
 .cad-groups { display: grid; gap: 6px; margin: 10px 0; }
@@ -396,18 +396,18 @@ dialog::backdrop { background: #0b172899; }
     .protocol-sidebar, .protocol-command-list { max-height: 260px; }
 }
 @media (max-width: 700px) {
-    header { position: relative; min-height: 58px; gap: 8px; padding: 10px 14px; flex-wrap: wrap; }
+    header { position: relative; min-height: 52px; gap: 8px; padding: 8px 10px; flex-wrap: wrap; }
     h1 { font-size: 16px; }
     h1::before { width: 34px; height: 34px; }
     #connection { order: 3; }
-    .connection { padding: 12px 14px; }
-    nav { position: relative; top: auto; padding: 7px 10px; }
+    .connection { padding: 8px 0; }
+    nav { position: relative; top: auto; padding: 5px 6px; }
     nav button { flex: 1 1 auto; justify-content: center; }
     #notice { top: 68px; right: 8px; max-width: calc(100vw - 16px); }
-    main { padding: 12px 10px 24px; }
-    .page { padding: 14px; }
+    main { padding: 6px 6px 12px; }
+    .page { padding: 8px; }
     .columns { grid-template-columns: 1fr; }
-    .columns > section + section { padding-left: 0; padding-top: 22px; border-top: 1px solid var(--line); border-left: 0; }
+    .columns > section + section { padding-left: 0; padding-top: 16px; border-top: 1px solid var(--line); border-left: 0; }
     .connection label { max-width: 100%; }
     #port { max-width: 230px; }
     .readouts output { font-size: 25px; }
