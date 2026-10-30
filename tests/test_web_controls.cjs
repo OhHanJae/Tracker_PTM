@@ -194,6 +194,18 @@ const {chromium} = require('playwright');
         failStatus = false;
         await page.evaluate(() => refreshOnce());
 
+        await page.locator('#tabs button').filter({hasText: '수동·위치'}).click();
+        await clear();
+        const heldDirection = await page.locator('[data-pan="right"][data-tilt="stop"]').boundingBox();
+        await page.mouse.move(heldDirection.x + heldDirection.width / 2, heldDirection.y + heldDirection.height / 2);
+        await page.mouse.down();
+        await waitCommand('motion.jog');
+        await page.waitForTimeout(1200);
+        assert.equal((await sent('motion.stop')).length, 0, 'held direction survives background status refresh');
+        assert.equal((await sent('motion.jog')).length, 1, 'the server owns the held-motion refresh');
+        await page.mouse.up();
+        await waitCommand('motion.stop');
+
         await page.locator('#tabs button').filter({hasText: '도면 캘리브레이션'}).click();
         await page.waitForFunction(() => !document.querySelector('#drawingSelect').disabled);
         await page.locator('#drawingSelect').selectOption('second');

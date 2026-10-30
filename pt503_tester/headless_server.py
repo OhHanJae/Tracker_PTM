@@ -100,11 +100,11 @@ CORE_WAKE_TIMEOUT_S = 2.0
 
 # Pelco-D manual motion is latched by direction bits. Generic Pelco guidance
 # describes a longer runaway timeout, but PT503 field behavior can stop sooner.
-# Refresh an active manual motion conservatively for Pelco runaway protection.
+# Keep a held manual command alive above the 320ms minimum command gap.
 # There is intentionally no short application watchdog: manual motion ends only
 # on explicit STOP/release,
 # another motion mode, serial disconnect, or communication failure.
-JOG_RESEND_INTERVAL_S = 3.5
+JOG_RESEND_INTERVAL_S = 0.35
 PELCO_MIN_COMMAND_GAP_S = 0.32
 PELCO_ABSOLUTE_AXIS_GAP_S = 0.05
 PELCO_POSITION_QUERY_GAP_S = 0.05
@@ -244,9 +244,8 @@ class HeadlessController:
         self._jog_lease_deadline = 0.0
         self._jog_token: str | None = None
         # Active continuous JOG key: (pan, tilt, pan_level, tilt_level).
-        # The PT unit receives the frame at start/change and then about every
-        # every few seconds while manual JOG remains active.  Re-sending too
-        # frequently can make some PT heads visibly restart/hesitate.
+        # Refresh is maintained by the server while the button/stick is held;
+        # browser status refresh and duplicate JOG requests do not schedule it.
         self._active_jog: tuple[Any, Any, int, int] | None = None
         # TCP jog ownership matters only for disconnect safety.  HTTP/Web JOG
         # has no persistent socket owner and therefore uses None.  A random TCP
@@ -270,6 +269,7 @@ class HeadlessController:
         self._last_protocol_states: dict[str, str] = {}
         self._shutdown = threading.Event()
         self._scan_cancel = threading.Event()
+        self._connection_generation = 0
         self.scanning = False
         self.auto_reconnect_config = {
             "enabled": True,
@@ -666,7 +666,7 @@ class HeadlessController:
 
                     # Pelco-D runaway protection: while the operator is still
                     # holding manual motion, repeat the same motion command only
-                    # every few seconds. Do NOT send STOP on a software timer;
+                    # every 350ms. Do NOT send STOP on a software timer;
                     # release/STOP is authoritative.
                     if jogging and now >= self._jog_next_resend:
                         pan, tilt, pan_level, tilt_level = self._active_jog
@@ -680,7 +680,7 @@ class HeadlessController:
                             ),
                             wait_ms=80,
                         )
-                        self._jog_next_resend = time.monotonic() + JOG_RESEND_INTERVAL_S
+                        self._jog_next_resend = now + JOG_RESEND_INTERVAL_S
 
                     if self._tracker and self._tracker.check_timeout().status == "timeout":
                         self._tracker = None
@@ -751,20 +751,23 @@ class HeadlessController:
 
     def _run_auto_reconnect(self) -> None:
         with self._lock:
-            if self._shutdown.is_set() or self.connected or self.scanning or self._auto_scan_active:
+            if (self._shutdown.is_set() or not self.auto_reconnect_config["enabled"]
+                    or self.connected or self.scanning or self._auto_scan_active):
                 return
             self._auto_scan_active = True
             self._last_auto_scan = time.monotonic()
-        self._publish_state_changes()
-        try:
+            generation = self._connection_generation
             config = dict(self.auto_reconnect_config)
             self._scan_cancel.clear()
+        self._publish_state_changes()
+        try:
             self.scan(
                 baudrates=list(config["baudrates"]),
                 first_address=int(config["first_address"]),
                 last_address=int(config["last_address"]),
                 timeout_ms=int(config["timeout_ms"]),
                 enable_auto_reconnect=True,
+                _expected_generation=generation,
             )
         except (HeadlessApiError, OSError, serial.SerialException):
             pass
@@ -1183,6 +1186,16 @@ class HeadlessController:
             if self._shutdown.is_set():
                 raise HeadlessApiError("SERVICE_STOPPING", "server is shutting down")
             self.close()
+            # A failed explicit connection still means the operator wants recovery.
+            self._port = port
+            self._baudrate = int(baudrate)
+            self._address = int(address)
+            if enable_auto_reconnect:
+                self.auto_reconnect_config["enabled"] = True
+                self.auto_reconnect_config["baudrates"] = [int(baudrate)]
+                self.auto_reconnect_config["first_address"] = int(address)
+                self.auto_reconnect_config["last_address"] = int(address)
+            self._save_settings()
             try:
                 self._serial = serial.Serial(
                     port=port,
@@ -1201,25 +1214,20 @@ class HeadlessController:
             except serial.SerialException as exc:
                 self._serial = None
                 raise HeadlessApiError("SERIAL_OPEN_FAILED", str(exc)) from exc
-            self._port = port
-            self._baudrate = int(baudrate)
-            self._address = int(address)
             self._health_misses = 0
             self._last_serial_tx_at = 0.0
-            if enable_auto_reconnect:
-                self.auto_reconnect_config["enabled"] = True
-                self.auto_reconnect_config["baudrates"] = [int(baudrate)]
-                self.auto_reconnect_config["first_address"] = int(address)
-                self.auto_reconnect_config["last_address"] = int(address)
-            self._save_settings()
             self._apply_power_on_home()
             return {"connected": self.connected, "port": port, "baudrate": baudrate, "address": address}
 
     def disconnect(self) -> dict[str, Any]:
         with self._lock:
             self.auto_reconnect_config["enabled"] = False
-            self._save_settings()
-        self.close()
+            self._connection_generation += 1
+            self._scan_cancel.set()
+            try:
+                self._save_settings()
+            finally:
+                self.close()
         return {"connected": False}
 
     def scan(
@@ -1231,8 +1239,13 @@ class HeadlessController:
         last_address: int = 1,
         timeout_ms: int = 200,
         enable_auto_reconnect: bool = True,
+        _expected_generation: int | None = None,
     ) -> dict[str, Any]:
         baudrates = baudrates or [9600]
+        with self._lock:
+            generation = self._connection_generation if _expected_generation is None else _expected_generation
+            if self._shutdown.is_set() or generation != self._connection_generation:
+                return {"found": False, "cancelled": True}
         ports = ports or [item.device for item in list_ports.comports()]
         for port in ports:
             for baudrate in baudrates:
@@ -1266,12 +1279,16 @@ class HeadlessController:
                                 received.extend(probe.read(count))
                                 if self._scan_has_match(received, address, command.data[6]):
                                     probe.close()
-                                    self.connect(
-                                        port,
-                                        baudrate,
-                                        address,
-                                        enable_auto_reconnect=enable_auto_reconnect,
-                                    )
+                                    with self._lock:
+                                        if (self._scan_cancel.is_set() or self._shutdown.is_set() or self.connected
+                                                or generation != self._connection_generation):
+                                            return {"found": False, "cancelled": True}
+                                        self.connect(
+                                            port,
+                                            baudrate,
+                                            address,
+                                            enable_auto_reconnect=enable_auto_reconnect,
+                                        )
                                     return {
                                         "found": True,
                                         "port": port,
@@ -1788,6 +1805,7 @@ class HeadlessController:
                     raise HeadlessApiError("BUSY", "Disconnect before scanning")
                 self.scanning = True
                 self._scan_cancel.clear()
+                generation = self._connection_generation
             try:
                 scan_ports = params.get("ports")
                 if scan_ports is not None and (
@@ -1795,13 +1813,20 @@ class HeadlessController:
                     or not all(isinstance(item, str) for item in scan_ports)
                 ):
                     raise HeadlessApiError("INVALID_PARAMS", "ports must be string array")
-                return self.scan(
+                scan_config = dict(
                     baudrates=[self._int({"baud": b}, "baud", minimum=1200, maximum=115200) for b in params.get("baudrates", [9600])],
-                    ports=scan_ports,
                     first_address=self._int(params, "first_address", 1, minimum=1, maximum=255),
                     last_address=self._int(params, "last_address", 1, minimum=1, maximum=255),
                     timeout_ms=self._int(params, "timeout_ms", 200, minimum=50, maximum=2000),
                 )
+                if not scan_config["baudrates"] or scan_config["first_address"] > scan_config["last_address"]:
+                    raise HeadlessApiError("INVALID_PARAMS", "valid baudrates and address range are required")
+                with self._lock:
+                    if generation != self._connection_generation or self._scan_cancel.is_set():
+                        return {"found": False, "cancelled": True}
+                    self.auto_reconnect_config.update(enabled=True, **scan_config)
+                    self._save_settings()
+                return self.scan(ports=scan_ports, _expected_generation=generation, **scan_config)
             finally:
                 with self._lock:
                     self.scanning = False
@@ -2061,6 +2086,7 @@ class HeadlessController:
                         # could postpone the server-side Pelco refresh forever.
                         rx: list[dict[str, Any]] = []
                     else:
+                        sent_at = time.monotonic()
                         rx = self.send(
                             manual_motion(
                                 self._address,
@@ -2072,7 +2098,7 @@ class HeadlessController:
                             wait_ms=80,
                         )
                         self._active_jog = jog_key
-                        self._jog_next_resend = time.monotonic() + JOG_RESEND_INTERVAL_S
+                        self._jog_next_resend = sent_at + JOG_RESEND_INTERVAL_S
 
                     # Ownership follows the client that most recently asserted
                     # the JOG.  HTTP/Web requests have client_id=None and are not
